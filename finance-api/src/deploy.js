@@ -142,7 +142,7 @@ export async function create(userId, username) {
         { name: "data", storageType: "EmptyDir" },
         { name: "persistent", storageName: link, storageType: "AzureFile" },
       ],
-      scale: { minReplicas: 0, maxReplicas: 1 },
+      scale: { minReplicas: 0, maxReplicas: 1, cooldownPeriod: 3600 },
     },
   });
 
