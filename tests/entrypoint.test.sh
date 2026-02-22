@@ -61,7 +61,7 @@ echo ""
 echo "Sync Logic:"
 
 echo "new-data" > "$TMPDIR/data/server-files/new-file.txt"
-rsync -a --delete --ignore-errors "$TMPDIR/data/" "$TMPDIR/persistent/" 2>/dev/null
+rsync -av --delete "$TMPDIR/data/" "$TMPDIR/persistent/" >/dev/null 2>&1
 if [ -f "$TMPDIR/persistent/server-files/new-file.txt" ]; then
   pass "rsync syncs new files to persistent"
 else
@@ -80,16 +80,53 @@ echo "Fresh Start:"
 
 FRESH_DIR=$(mktemp -d)
 mkdir -p "$FRESH_DIR/persistent" "$FRESH_DIR/data"
-# persistent is empty
-CONTENT=$(ls -A "$FRESH_DIR/persistent" 2>/dev/null)
-if [ -z "$CONTENT" ]; then
-  pass "empty persistent detected — fresh start"
+# persistent exists but has no files (only empty dirs should not count)
+mkdir -p "$FRESH_DIR/persistent/server-files"
+FILE_CHECK=$(find "$FRESH_DIR/persistent" -type f 2>/dev/null | head -1)
+if [ -z "$FILE_CHECK" ]; then
+  pass "empty persistent detected (dirs only) — fresh start"
 else
-  fail "empty check" "expected empty, got '$CONTENT'"
+  fail "empty check" "expected no files, got '$FILE_CHECK'"
 fi
 rm -rf "$FRESH_DIR"
 
-# ── Test 5: Verify entrypoint.sh is syntactically valid ────────
+# ── Test 5: Mount readiness check ──────────────────────────────
+echo ""
+echo "Mount Readiness:"
+
+MOUNT_DIR=$(mktemp -d)
+if touch "$MOUNT_DIR/.mount-test" 2>/dev/null && rm -f "$MOUNT_DIR/.mount-test"; then
+  pass "mount readiness check works on writable dir"
+else
+  fail "mount readiness" "could not write to mount dir"
+fi
+rm -rf "$MOUNT_DIR"
+
+# ── Test 6: Sync guard — skip sync when no server data ─────────
+echo ""
+echo "Sync Guard:"
+
+GUARD_DIR=$(mktemp -d)
+mkdir -p "$GUARD_DIR/data/server-files" "$GUARD_DIR/persistent"
+# No files in server-files — sync should be skipped
+FILE_CHECK=$(find "$GUARD_DIR/data/server-files" -type f 2>/dev/null | head -1)
+if [ -z "$FILE_CHECK" ]; then
+  pass "sync guard detects empty server-files"
+else
+  fail "sync guard" "expected no files"
+fi
+
+# With a file — sync should proceed
+echo "test" > "$GUARD_DIR/data/server-files/account.sqlite"
+FILE_CHECK=$(find "$GUARD_DIR/data/server-files" -type f 2>/dev/null | head -1)
+if [ -n "$FILE_CHECK" ]; then
+  pass "sync guard allows sync when server data exists"
+else
+  fail "sync guard" "expected files"
+fi
+rm -rf "$GUARD_DIR"
+
+# ── Test 7: Verify entrypoint.sh is syntactically valid ────────
 echo ""
 echo "Script Validation:"
 
@@ -107,7 +144,7 @@ else
   fail "executable check" "entrypoint.sh not executable"
 fi
 
-# ── Test 6: Signal handler is defined ──────────────────────────
+# ── Test 8: Signal handler is defined ──────────────────────────
 echo ""
 echo "Signal Handling:"
 
