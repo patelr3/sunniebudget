@@ -1,2 +1,6 @@
 actual-data
 docker-compose.yml
+.env
+*.key
+*.crt
+*.pem

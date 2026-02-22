@@ -1,0 +1,68 @@
+name: Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: patelr3-site-rg
+  ACR_NAME: patelr3acr
+  IMAGE_TAG: ${{ github.sha }}
+  AZURE_CLIENT_ID: e8de1562-63b2-4236-9c74-d8e3bf83e61d
+  AZURE_TENANT_ID: 50d3fb80-db3c-406e-bc9d-a22a6b825219
+  AZURE_SUBSCRIPTION_ID: 34154ec0-9335-4f09-a67a-bda54a403a14
+
+jobs:
+  build-and-deploy:
+    name: Build, Push & Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Build & push image
+        run: |
+          ACR_SERVER="${{ env.ACR_NAME }}.azurecr.io"
+          docker build \
+            -t "${ACR_SERVER}/actualbudget:${{ env.IMAGE_TAG }}" \
+            -t "${ACR_SERVER}/actualbudget:latest" \
+            .
+          docker push "${ACR_SERVER}/actualbudget:${{ env.IMAGE_TAG }}"
+          docker push "${ACR_SERVER}/actualbudget:latest"
+
+      - name: Deploy Bicep
+        run: |
+          az deployment group create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --template-file deployments/main.bicep \
+            --parameters imageTag="${{ env.IMAGE_TAG }}"
+
+      - name: Update container app revision
+        run: |
+          ACR_SERVER="${{ env.ACR_NAME }}.azurecr.io"
+          az containerapp update \
+            --name patelr3-actualbudget \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image "${ACR_SERVER}/actualbudget:${{ env.IMAGE_TAG }}"
+
+      - name: Verify deployment
+        run: |
+          FQDN=$(az containerapp show \
+            --name patelr3-actualbudget \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query 'properties.configuration.ingress.fqdn' -o tsv)
+          echo "Actual Budget: https://${FQDN}"

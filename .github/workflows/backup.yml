@@ -1,0 +1,102 @@
+name: Monthly Backup
+
+on:
+  schedule:
+    - cron: '0 6 1 * *'  # 6 AM UTC on the 1st of each month
+  workflow_dispatch:       # Allow manual trigger
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: patelr3-site-rg
+  STORAGE_ACCOUNT: patelr3actualdata
+  AZURE_CLIENT_ID: e8de1562-63b2-4236-9c74-d8e3bf83e61d
+  AZURE_TENANT_ID: 50d3fb80-db3c-406e-bc9d-a22a6b825219
+  AZURE_SUBSCRIPTION_ID: 34154ec0-9335-4f09-a67a-bda54a403a14
+
+jobs:
+  backup:
+    name: Backup Actual Budget Data
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Create snapshot backup
+        run: |
+          TIMESTAMP=$(date +%Y-%m-%d)
+          STORAGE_KEY=$(az storage account keys list \
+            --account-name ${{ env.STORAGE_ACCOUNT }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query '[0].value' -o tsv)
+
+          # Create a snapshot of the file share
+          SNAPSHOT=$(az storage share snapshot \
+            --name actual-data \
+            --account-name ${{ env.STORAGE_ACCOUNT }} \
+            --account-key "${STORAGE_KEY}" \
+            --query 'snapshot' -o tsv)
+          echo "Created file share snapshot: ${SNAPSHOT}"
+
+          # Also copy key files to blob storage for redundancy
+          # Download from file share
+          mkdir -p /tmp/backup
+          az storage file download-batch \
+            --source actual-data \
+            --destination /tmp/backup \
+            --account-name ${{ env.STORAGE_ACCOUNT }} \
+            --account-key "${STORAGE_KEY}" \
+            --pattern "server-files/*" \
+            --no-progress
+
+          az storage file download-batch \
+            --source actual-data \
+            --destination /tmp/backup \
+            --account-name ${{ env.STORAGE_ACCOUNT }} \
+            --account-key "${STORAGE_KEY}" \
+            --pattern "user-files/*" \
+            --no-progress
+
+          # Upload to blob backup container
+          az storage blob upload-batch \
+            --source /tmp/backup \
+            --destination backups \
+            --destination-path "${TIMESTAMP}" \
+            --account-name ${{ env.STORAGE_ACCOUNT }} \
+            --account-key "${STORAGE_KEY}" \
+            --overwrite \
+            --no-progress
+
+          echo "Backup completed: ${TIMESTAMP}"
+
+      - name: Clean old backups (keep 6 months)
+        run: |
+          STORAGE_KEY=$(az storage account keys list \
+            --account-name ${{ env.STORAGE_ACCOUNT }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query '[0].value' -o tsv)
+
+          CUTOFF=$(date -d '6 months ago' +%Y-%m-%d 2>/dev/null || date -v-6m +%Y-%m-%d)
+
+          # List and delete old backup folders
+          az storage blob list \
+            --container-name backups \
+            --account-name ${{ env.STORAGE_ACCOUNT }} \
+            --account-key "${STORAGE_KEY}" \
+            --query "[?properties.creationTime < '${CUTOFF}'].name" -o tsv | \
+          while IFS= read -r blob; do
+            [ -z "$blob" ] && continue
+            az storage blob delete \
+              --container-name backups \
+              --name "$blob" \
+              --account-name ${{ env.STORAGE_ACCOUNT }} \
+              --account-key "${STORAGE_KEY}" \
+              --no-progress
+          done
+          echo "Cleanup complete"
