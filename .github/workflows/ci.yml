@@ -32,4 +32,4 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Validate Bicep syntax
-        run: az bicep build --file deployments/main.bicep --stdout > /dev/null
+        run: az bicep build --file deployments/finance-infra.bicep --stdout > /dev/null

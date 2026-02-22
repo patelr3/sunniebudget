@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  RESOURCE_GROUP: patelr3-site-rg
+  FINANCE_RG: patelr3-finance-rg
   ACR_NAME: patelr3acr
   IMAGE_TAG: ${{ github.sha }}
   AZURE_CLIENT_ID: e8de1562-63b2-4236-9c74-d8e3bf83e61d
@@ -31,7 +31,7 @@ jobs:
         run: bash tests/docker-build.test.sh
 
       - name: Validate Bicep
-        run: az bicep build --file deployments/main.bicep --stdout > /dev/null
+        run: az bicep build --file deployments/finance-infra.bicep --stdout > /dev/null
 
   build-and-deploy:
     name: Build, Push & Deploy
@@ -53,42 +53,53 @@ jobs:
       - name: Pre-deployment backup
         run: |
           STORAGE_KEY=$(az storage account keys list \
-            --account-name patelr3actualdata \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --query '[0].value' -o tsv)
+            --account-name patelr3financedata \
+            --resource-group ${{ env.FINANCE_RG }} \
+            --query '[0].value' -o tsv 2>/dev/null) || true
+
+          if [ -z "$STORAGE_KEY" ]; then
+            echo "Storage account not yet created — skipping backup"
+            exit 0
+          fi
 
           TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
 
-          # Download current data from Azure File Share
-          mkdir -p /tmp/pre-deploy-backup
-          az storage file download-batch \
-            --source actual-data \
-            --destination /tmp/pre-deploy-backup \
-            --account-name patelr3actualdata \
+          # Back up all user file shares
+          SHARES=$(az storage share list \
+            --account-name patelr3financedata \
             --account-key "${STORAGE_KEY}" \
-            --no-progress 2>/dev/null || true
+            --query "[?starts_with(name,'actual-user-')].name" -o tsv 2>/dev/null) || true
 
-          # Check if there's anything to back up
-          FILE_COUNT=$(find /tmp/pre-deploy-backup -type f | wc -l)
-          if [ "$FILE_COUNT" -gt 0 ]; then
-            az storage blob upload-batch \
-              --source /tmp/pre-deploy-backup \
-              --destination backups \
-              --destination-path "pre-deploy-${TIMESTAMP}" \
-              --account-name patelr3actualdata \
+          for SHARE in $SHARES; do
+            USER_ID="${SHARE#actual-user-}"
+            mkdir -p "/tmp/backup/${USER_ID}"
+            az storage file download-batch \
+              --source "$SHARE" \
+              --destination "/tmp/backup/${USER_ID}" \
+              --account-name patelr3financedata \
               --account-key "${STORAGE_KEY}" \
-              --overwrite \
-              --no-progress
-            echo "Pre-deployment backup saved: pre-deploy-${TIMESTAMP} (${FILE_COUNT} files)"
-          else
-            echo "No existing data to back up — skipping"
-          fi
+              --no-progress 2>/dev/null || true
 
-          rm -rf /tmp/pre-deploy-backup
+            FILE_COUNT=$(find "/tmp/backup/${USER_ID}" -type f 2>/dev/null | wc -l)
+            if [ "$FILE_COUNT" -gt 0 ]; then
+              az storage blob upload-batch \
+                --source "/tmp/backup/${USER_ID}" \
+                --destination backups \
+                --destination-path "pre-deploy-${TIMESTAMP}/user-${USER_ID}" \
+                --account-name patelr3financedata \
+                --account-key "${STORAGE_KEY}" \
+                --overwrite --no-progress
+              echo "Backed up user ${USER_ID}: ${FILE_COUNT} files"
+            fi
+          done
 
-      - name: Build & push image
+          rm -rf /tmp/backup
+
+      - name: Build & push images
         run: |
           ACR_SERVER="${{ env.ACR_NAME }}.azurecr.io"
+
+          # Actual Budget server image
           docker build \
             -t "${ACR_SERVER}/actualbudget:${{ env.IMAGE_TAG }}" \
             -t "${ACR_SERVER}/actualbudget:latest" \
@@ -96,25 +107,60 @@ jobs:
           docker push "${ACR_SERVER}/actualbudget:${{ env.IMAGE_TAG }}"
           docker push "${ACR_SERVER}/actualbudget:latest"
 
-      - name: Deploy Bicep
+          # Finance API image
+          docker build \
+            -t "${ACR_SERVER}/finance-api:${{ env.IMAGE_TAG }}" \
+            -t "${ACR_SERVER}/finance-api:latest" \
+            ./finance-api
+          docker push "${ACR_SERVER}/finance-api:${{ env.IMAGE_TAG }}"
+          docker push "${ACR_SERVER}/finance-api:latest"
+
+      - name: Deploy infrastructure
         run: |
           az deployment group create \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --template-file deployments/main.bicep \
-            --parameters imageTag="${{ env.IMAGE_TAG }}"
+            --resource-group ${{ env.FINANCE_RG }} \
+            --template-file deployments/finance-infra.bicep \
+            --parameters \
+              financeApiTag="${{ env.IMAGE_TAG }}" \
+              financeApiKey="${{ secrets.FINANCE_API_KEY }}"
 
-      - name: Update container app revision
+      - name: Grant finance-api permissions
+        run: |
+          # Get finance-api managed identity principal ID
+          PRINCIPAL_ID=$(az containerapp show \
+            --name finance-api \
+            --resource-group ${{ env.FINANCE_RG }} \
+            --query 'identity.principalId' -o tsv)
+
+          # Contributor on finance RG (for creating user ACAs, file shares, storage links)
+          az role assignment create \
+            --assignee-object-id "$PRINCIPAL_ID" \
+            --assignee-principal-type ServicePrincipal \
+            --role Contributor \
+            --scope "/subscriptions/${{ env.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ env.FINANCE_RG }}" \
+            2>/dev/null || true
+
+          # Contributor on ACR (for listCredentials when creating user ACAs)
+          ACR_ID=$(az acr show --name ${{ env.ACR_NAME }} --resource-group patelr3-site-rg --query id -o tsv)
+          az role assignment create \
+            --assignee-object-id "$PRINCIPAL_ID" \
+            --assignee-principal-type ServicePrincipal \
+            --role Contributor \
+            --scope "$ACR_ID" \
+            2>/dev/null || true
+
+      - name: Update finance-api revision
         run: |
           ACR_SERVER="${{ env.ACR_NAME }}.azurecr.io"
           az containerapp update \
-            --name patelr3-actualbudget \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --image "${ACR_SERVER}/actualbudget:${{ env.IMAGE_TAG }}"
+            --name finance-api \
+            --resource-group ${{ env.FINANCE_RG }} \
+            --image "${ACR_SERVER}/finance-api:${{ env.IMAGE_TAG }}"
 
       - name: Verify deployment
         run: |
           FQDN=$(az containerapp show \
-            --name patelr3-actualbudget \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name finance-api \
+            --resource-group ${{ env.FINANCE_RG }} \
             --query 'properties.configuration.ingress.fqdn' -o tsv)
-          echo "Actual Budget: https://${FQDN}"
+          echo "Finance API: https://${FQDN}"

@@ -1,0 +1,16 @@
+{
+  "name": "finance-api",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@azure/arm-appcontainers": "^2.1.0",
+    "@azure/arm-storage": "^18.3.0",
+    "@azure/identity": "^4.5.0",
+    "express": "^4.21.1"
+  }
+}

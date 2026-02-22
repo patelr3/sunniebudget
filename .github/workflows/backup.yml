@@ -10,15 +10,15 @@ permissions:
   contents: read
 
 env:
-  RESOURCE_GROUP: patelr3-site-rg
-  STORAGE_ACCOUNT: patelr3actualdata
+  FINANCE_RG: patelr3-finance-rg
+  STORAGE_ACCOUNT: patelr3financedata
   AZURE_CLIENT_ID: e8de1562-63b2-4236-9c74-d8e3bf83e61d
   AZURE_TENANT_ID: 50d3fb80-db3c-406e-bc9d-a22a6b825219
   AZURE_SUBSCRIPTION_ID: 34154ec0-9335-4f09-a67a-bda54a403a14
 
 jobs:
   backup:
-    name: Backup Actual Budget Data
+    name: Backup All User Data
     runs-on: ubuntu-latest
     steps:
       - name: Log in to Azure
@@ -28,63 +28,73 @@ jobs:
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Create snapshot backup
+      - name: Backup all user file shares
         run: |
           TIMESTAMP=$(date +%Y-%m-%d)
           STORAGE_KEY=$(az storage account keys list \
             --account-name ${{ env.STORAGE_ACCOUNT }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --resource-group ${{ env.FINANCE_RG }} \
             --query '[0].value' -o tsv)
 
-          # Create a snapshot of the file share
-          SNAPSHOT=$(az storage share snapshot \
-            --name actual-data \
+          # List all user file shares
+          SHARES=$(az storage share list \
             --account-name ${{ env.STORAGE_ACCOUNT }} \
             --account-key "${STORAGE_KEY}" \
-            --query 'snapshot' -o tsv)
-          echo "Created file share snapshot: ${SNAPSHOT}"
+            --query "[?starts_with(name,'actual-user-')].name" -o tsv)
 
-          # Also copy key files to blob storage for redundancy
-          # Download from file share
-          mkdir -p /tmp/backup
-          az storage file download-batch \
-            --source actual-data \
-            --destination /tmp/backup \
-            --account-name ${{ env.STORAGE_ACCOUNT }} \
-            --account-key "${STORAGE_KEY}" \
-            --pattern "server-files/*" \
-            --no-progress
+          if [ -z "$SHARES" ]; then
+            echo "No user file shares found — skipping"
+            exit 0
+          fi
 
-          az storage file download-batch \
-            --source actual-data \
-            --destination /tmp/backup \
-            --account-name ${{ env.STORAGE_ACCOUNT }} \
-            --account-key "${STORAGE_KEY}" \
-            --pattern "user-files/*" \
-            --no-progress
+          for SHARE in $SHARES; do
+            USER_ID="${SHARE#actual-user-}"
+            echo "Backing up user ${USER_ID}..."
 
-          # Upload to blob backup container
-          az storage blob upload-batch \
-            --source /tmp/backup \
-            --destination backups \
-            --destination-path "${TIMESTAMP}" \
-            --account-name ${{ env.STORAGE_ACCOUNT }} \
-            --account-key "${STORAGE_KEY}" \
-            --overwrite \
-            --no-progress
+            # Snapshot the file share
+            SNAPSHOT=$(az storage share snapshot \
+              --name "$SHARE" \
+              --account-name ${{ env.STORAGE_ACCOUNT }} \
+              --account-key "${STORAGE_KEY}" \
+              --query 'snapshot' -o tsv 2>/dev/null) || true
+            echo "  Snapshot: ${SNAPSHOT:-skipped}"
 
-          echo "Backup completed: ${TIMESTAMP}"
+            # Download and copy to blob storage
+            mkdir -p "/tmp/backup/${USER_ID}"
+            az storage file download-batch \
+              --source "$SHARE" \
+              --destination "/tmp/backup/${USER_ID}" \
+              --account-name ${{ env.STORAGE_ACCOUNT }} \
+              --account-key "${STORAGE_KEY}" \
+              --no-progress 2>/dev/null || true
+
+            FILE_COUNT=$(find "/tmp/backup/${USER_ID}" -type f 2>/dev/null | wc -l)
+            if [ "$FILE_COUNT" -gt 0 ]; then
+              az storage blob upload-batch \
+                --source "/tmp/backup/${USER_ID}" \
+                --destination backups \
+                --destination-path "${TIMESTAMP}/user-${USER_ID}" \
+                --account-name ${{ env.STORAGE_ACCOUNT }} \
+                --account-key "${STORAGE_KEY}" \
+                --overwrite --no-progress
+              echo "  Backed up ${FILE_COUNT} files"
+            else
+              echo "  No files to back up"
+            fi
+          done
+
+          rm -rf /tmp/backup
+          echo "Backup complete: ${TIMESTAMP}"
 
       - name: Clean old backups (keep 6 months)
         run: |
           STORAGE_KEY=$(az storage account keys list \
             --account-name ${{ env.STORAGE_ACCOUNT }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --resource-group ${{ env.FINANCE_RG }} \
             --query '[0].value' -o tsv)
 
           CUTOFF=$(date -d '6 months ago' +%Y-%m-%d 2>/dev/null || date -v-6m +%Y-%m-%d)
 
-          # List and delete old backup folders
           az storage blob list \
             --container-name backups \
             --account-name ${{ env.STORAGE_ACCOUNT }} \
