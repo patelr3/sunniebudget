@@ -18,11 +18,11 @@ sync_to_persistent() {
   if [ -d /persistent ]; then
     if [ "$RESTORE_OK" = true ]; then
       # Full restore succeeded — safe to mirror with --delete
-      rsync -av --delete /data/ /persistent/ 2>&1 | tail -3
+      rsync -rl --safe-links --delete /data/ /persistent/ 2>&1 | tail -3
     else
       # Restore was partial or failed — only add/update, never delete
       echo "[entrypoint] Using additive sync (restore was incomplete)."
-      rsync -av /data/ /persistent/ 2>&1 | tail -3
+      rsync -rl --safe-links /data/ /persistent/ 2>&1 | tail -3
     fi
     echo "[entrypoint] Sync to persistent completed."
   fi
@@ -63,7 +63,9 @@ fi
 # ── Step 2: Restore from persistent storage ─────────────────────
 if [ -d /persistent ] && [ "$(find /persistent -type f 2>/dev/null | head -1)" ]; then
   echo "[entrypoint] Restoring data from Azure File Share..."
-  if rsync -av /persistent/ /data/ 2>&1; then
+  # Use -rl instead of -a to avoid permission errors on root-owned dirs
+  # (emptyDir root is owned by root, container runs as 'actual')
+  if rsync -rl --safe-links /persistent/ /data/ 2>&1; then
     RESTORE_OK=true
     echo "[entrypoint] Restore complete (full)."
   else

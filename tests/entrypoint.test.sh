@@ -61,7 +61,7 @@ echo ""
 echo "Sync Logic:"
 
 echo "new-data" > "$TMPDIR/data/server-files/new-file.txt"
-rsync -av --delete "$TMPDIR/data/" "$TMPDIR/persistent/" >/dev/null 2>&1
+rsync -rl --safe-links --delete "$TMPDIR/data/" "$TMPDIR/persistent/" >/dev/null 2>&1
 if [ -f "$TMPDIR/persistent/server-files/new-file.txt" ]; then
   pass "rsync syncs new files to persistent"
 else
