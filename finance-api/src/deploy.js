@@ -85,31 +85,29 @@ export async function create(userId) {
   const app = await aca.containerApps.beginCreateOrUpdateAndWait(RG, name, {
     location: LOC,
     tags: { project: "finance", userId: String(userId), managedBy: "finance-api" },
-    properties: {
-      managedEnvironmentId: caeId,
-      configuration: {
-        activeRevisionsMode: "Single",
-        ingress: { external: true, targetPort: 5006, transport: "auto", allowInsecure: false },
-        registries: [{ server: ACR, username: acr.username, passwordSecretRef: "acr-password" }],
-        secrets: [{ name: "acr-password", value: acr.password }],
-      },
-      template: {
-        terminationGracePeriodSeconds: 90,
-        containers: [{
-          name: "actualbudget",
-          image: `${ACR}/actualbudget:latest`,
-          resources: { cpu: 0.25, memory: "0.5Gi" },
-          volumeMounts: [
-            { volumeName: "data", mountPath: "/data" },
-            { volumeName: "persistent", mountPath: "/persistent" },
-          ],
-        }],
-        volumes: [
-          { name: "data", storageType: "EmptyDir" },
-          { name: "persistent", storageName: link, storageType: "AzureFile" },
+    managedEnvironmentId: caeId,
+    configuration: {
+      activeRevisionsMode: "Single",
+      ingress: { external: true, targetPort: 5006, transport: "auto", allowInsecure: false },
+      registries: [{ server: ACR, username: acr.username, passwordSecretRef: "acr-password" }],
+      secrets: [{ name: "acr-password", value: acr.password }],
+    },
+    template: {
+      terminationGracePeriodSeconds: 90,
+      containers: [{
+        name: "actualbudget",
+        image: `${ACR}/actualbudget:latest`,
+        resources: { cpu: 0.25, memory: "0.5Gi" },
+        volumeMounts: [
+          { volumeName: "data", mountPath: "/data" },
+          { volumeName: "persistent", mountPath: "/persistent" },
         ],
-        scale: { minReplicas: 0, maxReplicas: 1 },
-      },
+      }],
+      volumes: [
+        { name: "data", storageType: "EmptyDir" },
+        { name: "persistent", storageName: link, storageType: "AzureFile" },
+      ],
+      scale: { minReplicas: 0, maxReplicas: 1 },
     },
   });
 
