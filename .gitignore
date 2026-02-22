@@ -4,3 +4,4 @@ docker-compose.yml
 *.key
 *.crt
 *.pem
+node_modules/

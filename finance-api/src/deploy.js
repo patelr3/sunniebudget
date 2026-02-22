@@ -157,6 +157,7 @@ export async function update(userId) {
   const name = app.name;
 
   app.template.containers[0].image = `${ACR}/actualbudget:latest`;
+  app.template.scale = { ...app.template.scale, cooldownPeriod: 3600 };
   await aca.containerApps.beginCreateOrUpdateAndWait(RG, name, app);
 
   const fqdn = app.configuration?.ingress?.fqdn || "";
