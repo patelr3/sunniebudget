@@ -14,6 +14,10 @@ function requireApiKey(req, res, next) {
   next();
 }
 
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok", service: "finance-api" });
+});
+
 app.use(requireApiKey);
 
 // GET /deployments/:userId — check deployment status
@@ -63,10 +67,6 @@ app.delete("/deployments/:userId", async (req, res) => {
     console.error("[finance-api] delete error:", err);
     res.status(500).json({ error: "Failed to delete deployment", message: err.message });
   }
-});
-
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok", service: "finance-api" });
 });
 
 app.listen(config.port, "0.0.0.0", () => {
