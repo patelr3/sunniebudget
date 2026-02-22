@@ -6,7 +6,9 @@ set -e
 #
 # Strategy:
 #   1. On startup: wait for Azure File Share, restore /persistent → /data
-#   2. While running: sync /data → /persistent every 60s (only if restore succeeded)
+#   2. While running: sync /data → /persistent every 60s
+#      - Use --delete ONLY if initial restore was fully successful
+#      - Otherwise use additive sync (never delete from persistent)
 #   3. On shutdown (SIGTERM/SIGINT): final sync before exit
 
 SYNC_PID=""
@@ -14,11 +16,15 @@ RESTORE_OK=false
 
 sync_to_persistent() {
   if [ -d /persistent ]; then
-    if rsync -av --delete /data/ /persistent/ 2>&1 | tail -1; then
-      echo "[entrypoint] Sync to persistent completed."
+    if [ "$RESTORE_OK" = true ]; then
+      # Full restore succeeded — safe to mirror with --delete
+      rsync -av --delete /data/ /persistent/ 2>&1 | tail -3
     else
-      echo "[entrypoint] WARNING: Sync to persistent failed!" >&2
+      # Restore was partial or failed — only add/update, never delete
+      echo "[entrypoint] Using additive sync (restore was incomplete)."
+      rsync -av /data/ /persistent/ 2>&1 | tail -3
     fi
+    echo "[entrypoint] Sync to persistent completed."
   fi
 }
 
@@ -57,14 +63,15 @@ fi
 # ── Step 2: Restore from persistent storage ─────────────────────
 if [ -d /persistent ] && [ "$(find /persistent -type f 2>/dev/null | head -1)" ]; then
   echo "[entrypoint] Restoring data from Azure File Share..."
-  if rsync -av /persistent/ /data/ 2>&1 | tail -3; then
+  if rsync -av /persistent/ /data/ 2>&1; then
     RESTORE_OK=true
-    echo "[entrypoint] Restore complete."
+    echo "[entrypoint] Restore complete (full)."
   else
-    echo "[entrypoint] WARNING: Restore failed — starting with whatever data exists." >&2
+    echo "[entrypoint] WARNING: Restore had errors (partial). Sync will be additive only." >&2
   fi
 else
   echo "[entrypoint] No files found on Azure File Share — starting fresh."
+  RESTORE_OK=true
 fi
 
 # ── Step 3: Remove any TLS config (ACA handles HTTPS) ──────────
@@ -74,12 +81,11 @@ if [ -f /data/config.json ]; then
 fi
 
 # ── Step 4: Background sync (every 60s) ────────────────────────
-# Only sync with --delete if restore succeeded, to avoid wiping good data
 if [ -d /persistent ]; then
   (
     while true; do
       sleep 60
-      if [ "$RESTORE_OK" = true ] || [ "$(find /data/server-files -type f 2>/dev/null | head -1)" ]; then
+      if [ "$(find /data/server-files -type f 2>/dev/null | head -1)" ]; then
         sync_to_persistent
       else
         echo "[entrypoint] Skipping sync — no server data to persist yet."
