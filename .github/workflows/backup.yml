@@ -36,11 +36,11 @@ jobs:
             --resource-group ${{ env.FINANCE_RG }} \
             --query '[0].value' -o tsv)
 
-          # List all user file shares
+          # List all user file shares (supports both old actual-user-* and new actual-{name}-{hash})
           SHARES=$(az storage share list \
             --account-name ${{ env.STORAGE_ACCOUNT }} \
             --account-key "${STORAGE_KEY}" \
-            --query "[?starts_with(name,'actual-user-')].name" -o tsv)
+            --query "[?starts_with(name,'actual-')].name" -o tsv)
 
           if [ -z "$SHARES" ]; then
             echo "No user file shares found — skipping"
@@ -48,8 +48,7 @@ jobs:
           fi
 
           for SHARE in $SHARES; do
-            USER_ID="${SHARE#actual-user-}"
-            echo "Backing up user ${USER_ID}..."
+            echo "Backing up share ${SHARE}..."
 
             # Snapshot the file share
             SNAPSHOT=$(az storage share snapshot \
@@ -59,32 +58,110 @@ jobs:
               --query 'snapshot' -o tsv 2>/dev/null) || true
             echo "  Snapshot: ${SNAPSHOT:-skipped}"
 
-            # Download and copy to blob storage
-            mkdir -p "/tmp/backup/${USER_ID}"
+            # Download full share to local disk
+            mkdir -p "/tmp/backup/${SHARE}"
             az storage file download-batch \
               --source "$SHARE" \
-              --destination "/tmp/backup/${USER_ID}" \
+              --destination "/tmp/backup/${SHARE}" \
               --account-name ${{ env.STORAGE_ACCOUNT }} \
               --account-key "${STORAGE_KEY}" \
               --no-progress 2>/dev/null || true
 
-            FILE_COUNT=$(find "/tmp/backup/${USER_ID}" -type f 2>/dev/null | wc -l)
+            FILE_COUNT=$(find "/tmp/backup/${SHARE}" -type f 2>/dev/null | wc -l)
             if [ "$FILE_COUNT" -gt 0 ]; then
+              # Raw file backup
               az storage blob upload-batch \
-                --source "/tmp/backup/${USER_ID}" \
+                --source "/tmp/backup/${SHARE}" \
                 --destination backups \
-                --destination-path "${TIMESTAMP}/user-${USER_ID}" \
+                --destination-path "raw/${TIMESTAMP}/${SHARE}" \
                 --account-name ${{ env.STORAGE_ACCOUNT }} \
                 --account-key "${STORAGE_KEY}" \
                 --overwrite --no-progress
-              echo "  Backed up ${FILE_COUNT} files"
+              echo "  Raw backup: ${FILE_COUNT} files"
             else
               echo "  No files to back up"
             fi
           done
 
-          rm -rf /tmp/backup
-          echo "Backup complete: ${TIMESTAMP}"
+          echo "Raw backup complete: ${TIMESTAMP}"
+
+      - name: Create export-format backups
+        run: |
+          TIMESTAMP=$(date +%Y-%m-%d)
+          STORAGE_KEY=$(az storage account keys list \
+            --account-name ${{ env.STORAGE_ACCOUNT }} \
+            --resource-group ${{ env.FINANCE_RG }} \
+            --query '[0].value' -o tsv)
+
+          sudo apt-get -qq install -y sqlite3 zip >/dev/null 2>&1
+
+          SHARES=$(az storage share list \
+            --account-name ${{ env.STORAGE_ACCOUNT }} \
+            --account-key "${STORAGE_KEY}" \
+            --query "[?starts_with(name,'actual-')].name" -o tsv)
+
+          for SHARE in $SHARES; do
+            SHARE_DIR="/tmp/backup/${SHARE}"
+            EXPORT_DIR="/tmp/exports/${SHARE}"
+            mkdir -p "$EXPORT_DIR"
+
+            # Find all budget sqlite files in server-files/
+            BUDGET_COUNT=0
+            if [ -d "${SHARE_DIR}/server-files" ]; then
+              for DB_PATH in "${SHARE_DIR}/server-files"/*/db.sqlite; do
+                [ -f "$DB_PATH" ] || continue
+                GROUP_DIR=$(dirname "$DB_PATH")
+                GROUP_ID=$(basename "$GROUP_DIR")
+
+                # Extract budget name from sqlite metadata if possible
+                BUDGET_NAME=$(sqlite3 "$DB_PATH" \
+                  "SELECT value FROM messages_crdt WHERE dataset='prefs' AND row='budgetName' LIMIT 1;" \
+                  2>/dev/null || echo "")
+                [ -z "$BUDGET_NAME" ] && BUDGET_NAME="budget-${GROUP_ID}"
+
+                # Sanitize budget name for filename
+                SAFE_NAME=$(echo "$BUDGET_NAME" | tr -cs 'a-zA-Z0-9_-' '-' | sed 's/^-//;s/-$//')
+                [ -z "$SAFE_NAME" ] && SAFE_NAME="budget-${GROUP_ID}"
+
+                # Create metadata.json
+                cat > "/tmp/export-meta.json" <<METAEOF
+          {
+            "fileId": "${GROUP_ID}",
+            "budgetName": "${BUDGET_NAME}",
+            "exportDate": "${TIMESTAMP}",
+            "source": "${SHARE}"
+          }
+          METAEOF
+
+                # Create export zip
+                ZIP_NAME="${SAFE_NAME}-${TIMESTAMP}.zip"
+                (cd /tmp && zip -j "${EXPORT_DIR}/${ZIP_NAME}" "$DB_PATH" export-meta.json) >/dev/null 2>&1
+                # Rename metadata inside zip
+                (cd /tmp && zip "${EXPORT_DIR}/${ZIP_NAME}" -d export-meta.json >/dev/null 2>&1 || true)
+                cp /tmp/export-meta.json /tmp/metadata.json
+                (cd /tmp && zip -j "${EXPORT_DIR}/${ZIP_NAME}" metadata.json) >/dev/null 2>&1
+
+                BUDGET_COUNT=$((BUDGET_COUNT + 1))
+                echo "  Exported: ${BUDGET_NAME} (${GROUP_ID})"
+              done
+            fi
+
+            if [ "$BUDGET_COUNT" -gt 0 ]; then
+              az storage blob upload-batch \
+                --source "$EXPORT_DIR" \
+                --destination backups \
+                --destination-path "exports/${TIMESTAMP}/${SHARE}" \
+                --account-name ${{ env.STORAGE_ACCOUNT }} \
+                --account-key "${STORAGE_KEY}" \
+                --overwrite --no-progress
+              echo "  ${SHARE}: exported ${BUDGET_COUNT} budget(s)"
+            else
+              echo "  ${SHARE}: no budgets found to export"
+            fi
+          done
+
+          rm -rf /tmp/backup /tmp/exports /tmp/export-meta.json /tmp/metadata.json
+          echo "Export backup complete: ${TIMESTAMP}"
 
       - name: Clean old backups (keep 6 months)
         run: |

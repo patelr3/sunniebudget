@@ -34,12 +34,16 @@ app.get("/deployments/:userId", async (req, res) => {
 // POST /deployments/:userId — create a new deployment
 app.post("/deployments/:userId", async (req, res) => {
   try {
+    const { username } = req.body || {};
+    if (!username) {
+      return res.status(400).json({ error: "username is required in request body" });
+    }
     // Check if already exists
     const current = await getStatus(req.params.userId);
     if (current.status === "running" || current.status === "provisioning") {
       return res.status(409).json({ error: "Deployment already exists", ...current });
     }
-    const result = await create(req.params.userId);
+    const result = await create(req.params.userId, username);
     res.status(201).json(result);
   } catch (err) {
     console.error("[finance-api] create error:", err);

@@ -2,6 +2,7 @@
 import { DefaultAzureCredential } from "@azure/identity";
 import { ContainerAppsAPIClient } from "@azure/arm-appcontainers";
 import { StorageManagementClient } from "@azure/arm-storage";
+import crypto from "node:crypto";
 import config from "./config.js";
 
 const {
@@ -23,9 +24,33 @@ function clients() {
   return _clients;
 }
 
-function appName(userId) { return `ab-user-${userId}`; }
-function shareName(userId) { return `actual-user-${userId}`; }
-function linkName(userId) { return `actualuser${userId}`; }
+// Sanitize username for Azure resource names (lowercase alphanumeric only)
+// ACA name limit: 32 chars. Format: ab-{user}-{hash} → 3 + user + 1 + 4 = user ≤ 24
+// Storage link limit: 32 chars. Format: actual{user}{hash} → 6 + user + 4 = user ≤ 22
+// Cap at 20 for safety margin.
+function sanitizeUsername(username) {
+  return (username || "user").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20) || "user";
+}
+
+// Deterministic 4-char hex hash from userId
+function userHash(userId) {
+  return crypto.createHash("sha256").update(String(userId)).digest("hex").slice(0, 4);
+}
+
+function appName(username, userId) { return `ab-${sanitizeUsername(username)}-${userHash(userId)}`; }
+function shareName(username, userId) { return `actual-${sanitizeUsername(username)}-${userHash(userId)}`; }
+function linkName(username, userId) { return `actual${sanitizeUsername(username)}${userHash(userId)}`; }
+
+// Find a user's ACA by userId tag (handles old and new naming schemes)
+async function findAppByUserId(userId) {
+  const { aca } = clients();
+  for await (const app of aca.containerApps.listByResourceGroup(RG)) {
+    if (app.tags?.userId === String(userId) && app.tags?.managedBy === "finance-api") {
+      return app;
+    }
+  }
+  return null;
+}
 
 async function getAcrPassword() {
   const { cred } = clients();
@@ -42,8 +67,9 @@ async function getAcrPassword() {
 
 export async function getStatus(userId) {
   try {
-    const { aca } = clients();
-    const app = await aca.containerApps.get(RG, appName(userId));
+    const app = await findAppByUserId(userId);
+    if (!app) return { status: "not_created" };
+
     const prov = app.provisioningState?.toLowerCase() || "";
     const fqdn = app.configuration?.ingress?.fqdn || "";
 
@@ -51,21 +77,30 @@ export async function getStatus(userId) {
     if (prov === "failed") status = "error";
     else if (["inprogress", "waiting", "updating"].includes(prov)) status = "provisioning";
 
-    return { status, fqdn: fqdn ? `https://${fqdn}` : "", provisioningState: prov };
+    return { status, fqdn: fqdn ? `https://${fqdn}` : "", provisioningState: prov, appName: app.name };
   } catch (err) {
-    if (err.statusCode === 404 || err.code === "ResourceNotFound") {
-      return { status: "not_created" };
-    }
     console.error(`[deploy] getStatus(${userId}):`, err.message);
     return { status: "error", message: err.message };
   }
 }
 
-export async function create(userId) {
+const MAX_USER_INSTANCES = 10;
+
+export async function create(userId, username) {
   const { aca, storage } = clients();
-  const share = shareName(userId);
-  const link = linkName(userId);
-  const name = appName(userId);
+
+  // Enforce instance limit
+  let count = 0;
+  for await (const app of aca.containerApps.listByResourceGroup(RG)) {
+    if (app.tags?.managedBy === "finance-api") count++;
+  }
+  if (count >= MAX_USER_INSTANCES) {
+    throw new Error(`Instance limit reached (${MAX_USER_INSTANCES}). Please contact the site owner.`);
+  }
+
+  const share = shareName(username, userId);
+  const link = linkName(username, userId);
+  const name = appName(username, userId);
   const caeId = `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.App/managedEnvironments/${CAE}`;
 
   // 1. File share
@@ -84,7 +119,7 @@ export async function create(userId) {
   // 4. Create container app
   const app = await aca.containerApps.beginCreateOrUpdateAndWait(RG, name, {
     location: LOC,
-    tags: { project: "finance", userId: String(userId), managedBy: "finance-api" },
+    tags: { project: "finance", userId: String(userId), username: sanitizeUsername(username), managedBy: "finance-api" },
     managedEnvironmentId: caeId,
     configuration: {
       activeRevisionsMode: "Single",
@@ -117,25 +152,30 @@ export async function create(userId) {
 
 export async function update(userId) {
   const { aca } = clients();
-  const name = appName(userId);
+  const app = await findAppByUserId(userId);
+  if (!app) throw new Error("Deployment not found");
+  const name = app.name;
 
-  const existing = await aca.containerApps.get(RG, name);
-  existing.template.containers[0].image = `${ACR}/actualbudget:latest`;
-  await aca.containerApps.beginCreateOrUpdateAndWait(RG, name, existing);
+  app.template.containers[0].image = `${ACR}/actualbudget:latest`;
+  await aca.containerApps.beginCreateOrUpdateAndWait(RG, name, app);
 
-  const fqdn = existing.configuration?.ingress?.fqdn || "";
+  const fqdn = app.configuration?.ingress?.fqdn || "";
   return { status: "running", fqdn: fqdn ? `https://${fqdn}` : "" };
 }
 
 export async function remove(userId) {
   const { aca } = clients();
-  const name = appName(userId);
-  const link = linkName(userId);
+  const app = await findAppByUserId(userId);
+  if (!app) return { status: "deleted" };
+
+  const name = app.name;
+  // Derive the link name from the share tag or app name
+  const linkSuffix = name.replace(/^ab-/, "actual");
 
   try { await aca.containerApps.beginDeleteAndWait(RG, name); }
   catch (e) { if (e.statusCode !== 404) throw e; }
 
-  try { await aca.managedEnvironmentsStorages.delete(RG, CAE, link); }
+  try { await aca.managedEnvironmentsStorages.delete(RG, CAE, linkSuffix); }
   catch (e) { if (e.statusCode !== 404) throw e; }
 
   // File share preserved for backup/recovery
