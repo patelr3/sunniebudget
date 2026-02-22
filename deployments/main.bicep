@@ -119,12 +119,20 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
               volumeName: 'data'
               mountPath: '/data'
             }
+            {
+              volumeName: 'persistent'
+              mountPath: '/persistent'
+            }
           ]
         }
       ]
       volumes: [
         {
           name: 'data'
+          storageType: 'EmptyDir'
+        }
+        {
+          name: 'persistent'
           storageName: caeStorage.name
           storageType: 'AzureFile'
         }
