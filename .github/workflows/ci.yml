@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  entrypoint-tests:
+    name: Entrypoint Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run entrypoint tests
+        run: bash tests/entrypoint.test.sh
+
+  docker-build-tests:
+    name: Docker Build Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Docker build tests
+        run: bash tests/docker-build.test.sh
+
+  bicep-validate:
+    name: Validate Bicep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Bicep syntax
+        run: az bicep build --file deployments/main.bicep --stdout > /dev/null

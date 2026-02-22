@@ -18,8 +18,24 @@ env:
   AZURE_SUBSCRIPTION_ID: 34154ec0-9335-4f09-a67a-bda54a403a14
 
 jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run entrypoint tests
+        run: bash tests/entrypoint.test.sh
+
+      - name: Run Docker build tests
+        run: bash tests/docker-build.test.sh
+
+      - name: Validate Bicep
+        run: az bicep build --file deployments/main.bicep --stdout > /dev/null
+
   build-and-deploy:
     name: Build, Push & Deploy
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
