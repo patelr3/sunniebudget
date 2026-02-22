@@ -64,7 +64,7 @@ resource backupContainer 'Microsoft.Storage/storageAccounts/blobServices/contain
 }
 
 // ── Finance API (middleman for per-user ACA management) ────────
-resource financeApi 'Microsoft.App/containerApps@2024-03-01' = {
+resource financeApi 'Microsoft.App/containerApps@2024-10-02-preview' = {
   name: 'finance-api'
   location: location
   tags: tags
