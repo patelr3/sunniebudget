@@ -34,6 +34,42 @@ jobs:
       - name: Log in to ACR
         run: az acr login --name ${{ env.ACR_NAME }}
 
+      - name: Pre-deployment backup
+        run: |
+          STORAGE_KEY=$(az storage account keys list \
+            --account-name patelr3actualdata \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query '[0].value' -o tsv)
+
+          TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
+
+          # Download current data from Azure File Share
+          mkdir -p /tmp/pre-deploy-backup
+          az storage file download-batch \
+            --source actual-data \
+            --destination /tmp/pre-deploy-backup \
+            --account-name patelr3actualdata \
+            --account-key "${STORAGE_KEY}" \
+            --no-progress 2>/dev/null || true
+
+          # Check if there's anything to back up
+          FILE_COUNT=$(find /tmp/pre-deploy-backup -type f | wc -l)
+          if [ "$FILE_COUNT" -gt 0 ]; then
+            az storage blob upload-batch \
+              --source /tmp/pre-deploy-backup \
+              --destination backups \
+              --destination-path "pre-deploy-${TIMESTAMP}" \
+              --account-name patelr3actualdata \
+              --account-key "${STORAGE_KEY}" \
+              --overwrite \
+              --no-progress
+            echo "Pre-deployment backup saved: pre-deploy-${TIMESTAMP} (${FILE_COUNT} files)"
+          else
+            echo "No existing data to back up — skipping"
+          fi
+
+          rm -rf /tmp/pre-deploy-backup
+
       - name: Build & push image
         run: |
           ACR_SERVER="${{ env.ACR_NAME }}.azurecr.io"

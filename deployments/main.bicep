@@ -106,6 +106,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       ]
     }
     template: {
+      terminationGracePeriodSeconds: 90
       containers: [
         {
           name: 'actualbudget'
