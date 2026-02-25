@@ -41,6 +41,18 @@ function appName(username, userId) { return `ab-${sanitizeUsername(username)}-${
 function shareName(username, userId) { return `actual-${sanitizeUsername(username)}-${userHash(userId)}`; }
 function linkName(username, userId) { return `actual${sanitizeUsername(username)}${userHash(userId)}`; }
 
+// OpenID env vars for each ActualBudget instance (uses auth-api as OIDC IdP)
+function oidcEnvVars(instanceAppName) {
+  if (!config.oidcDiscoveryUrl) return [];
+  return [
+    { name: "ACTUAL_LOGIN_METHOD", value: "openid" },
+    { name: "ACTUAL_OPENID_DISCOVERY_URL", value: config.oidcDiscoveryUrl },
+    { name: "ACTUAL_OPENID_CLIENT_ID", value: config.oidcClientId },
+    { name: "ACTUAL_OPENID_CLIENT_SECRET", value: config.oidcClientSecret },
+    // SERVER_HOSTNAME set dynamically after ACA creation (requires FQDN)
+  ];
+}
+
 // Find a user's ACA by userId tag (handles old and new naming schemes)
 async function findAppByUserId(userId) {
   const { aca } = clients();
@@ -133,6 +145,7 @@ export async function create(userId, username) {
         name: "actualbudget",
         image: `${ACR}/actualbudget:latest`,
         resources: { cpu: 0.25, memory: "0.5Gi" },
+        env: oidcEnvVars(name),
         volumeMounts: [
           { volumeName: "data", mountPath: "/data" },
           { volumeName: "persistent", mountPath: "/persistent" },
@@ -147,6 +160,19 @@ export async function create(userId, username) {
   });
 
   const fqdn = app.configuration?.ingress?.fqdn || "";
+
+  // Update ACTUAL_OPENID_SERVER_HOSTNAME now that we know the FQDN
+  if (fqdn && config.oidcDiscoveryUrl) {
+    const containers = app.template.containers;
+    const envVars = containers[0].env || [];
+    const hostnameVar = envVars.find(e => e.name === "ACTUAL_OPENID_SERVER_HOSTNAME");
+    if (!hostnameVar) {
+      envVars.push({ name: "ACTUAL_OPENID_SERVER_HOSTNAME", value: `https://${fqdn}` });
+      containers[0].env = envVars;
+      await aca.containerApps.beginCreateOrUpdateAndWait(RG, name, app);
+    }
+  }
+
   return { status: "running", fqdn: fqdn ? `https://${fqdn}` : "" };
 }
 
@@ -181,4 +207,56 @@ export async function remove(userId) {
 
   // File share preserved for backup/recovery
   return { status: "deleted" };
+}
+
+export async function getServiceToken(userId) {
+  const { storage } = clients();
+  const app = await findAppByUserId(userId);
+  if (!app) throw new Error("Deployment not found");
+
+  // Read the service token from the user's Azure File Share
+  const username = app.tags?.username || "user";
+  const share = shareName(username, userId);
+
+  try {
+    const keys = await storage.storageAccounts.listKeys(RG, STORAGE);
+    const key = keys.keys[0].value;
+
+    // Download .service-token file from the file share via Azure Storage REST API
+    const url = `https://${STORAGE}.file.core.windows.net/${share}/.service-token`;
+    const dateStr = new Date().toUTCString();
+    const res = await fetch(url, {
+      headers: {
+        "x-ms-date": dateStr,
+        "x-ms-version": "2021-08-06",
+        "Authorization": `SharedKey ${STORAGE}:${computeSharedKey(STORAGE, key, "GET", url, dateStr)}`,
+      },
+    });
+
+    if (!res.ok) {
+      if (res.status === 404) return null;
+      throw new Error(`Failed to read service token: ${res.status}`);
+    }
+
+    const token = (await res.text()).trim();
+    const fqdn = app.configuration?.ingress?.fqdn || "";
+    return { token, fqdn: fqdn ? `https://${fqdn}` : "" };
+  } catch (err) {
+    console.error(`[deploy] getServiceToken(${userId}):`, err.message);
+    throw err;
+  }
+}
+
+// Compute SharedKey signature for Azure Storage REST API
+function computeSharedKey(account, key, method, urlStr, dateStr) {
+  const url = new URL(urlStr);
+  const canonicalResource = `/${account}${url.pathname}`;
+  const stringToSign = [
+    method, "", "", "", "", "", "", "", "", "", "", "",
+    `x-ms-date:${dateStr}`,
+    `x-ms-version:2021-08-06`,
+    canonicalResource,
+  ].join("\n");
+  return crypto.createHmac("sha256", Buffer.from(key, "base64"))
+    .update(stringToSign).digest("base64");
 }

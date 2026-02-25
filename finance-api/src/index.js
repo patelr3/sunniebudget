@@ -1,6 +1,6 @@
 import express from "express";
 import config from "./config.js";
-import { getStatus, create, update, remove } from "./deploy.js";
+import { getStatus, create, update, remove, getServiceToken } from "./deploy.js";
 
 const app = express();
 app.use(express.json());
@@ -70,6 +70,20 @@ app.delete("/deployments/:userId", async (req, res) => {
   } catch (err) {
     console.error("[finance-api] delete error:", err);
     res.status(500).json({ error: "Failed to delete deployment", message: err.message });
+  }
+});
+
+// GET /deployments/:userId/token — retrieve service session token for MCP access
+app.get("/deployments/:userId/token", async (req, res) => {
+  try {
+    const result = await getServiceToken(req.params.userId);
+    if (!result) {
+      return res.status(404).json({ error: "Service token not found — instance may not be bootstrapped yet" });
+    }
+    res.json(result);
+  } catch (err) {
+    console.error("[finance-api] getServiceToken error:", err);
+    res.status(500).json({ error: "Failed to get service token", message: err.message });
   }
 });
 

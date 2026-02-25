@@ -9,6 +9,10 @@ const config = {
   location: "westus2",
   // Shared secret between auth-api and finance-api for request validation
   apiKey: process.env.FINANCE_API_KEY || "dev-finance-key",
+  // OIDC provider URL (auth-api acting as IdP for ActualBudget instances)
+  oidcDiscoveryUrl: process.env.OIDC_DISCOVERY_URL || "",
+  oidcClientId: process.env.OIDC_CLIENT_ID || "actualbudget",
+  oidcClientSecret: process.env.OIDC_CLIENT_SECRET || "",
 };
 
 export default config;

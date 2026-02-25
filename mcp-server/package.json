@@ -1,0 +1,25 @@
+{
+  "name": "actualbudget-mcp-server",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "NODE_OPTIONS='--experimental-vm-modules' npx jest --forceExit"
+  },
+  "jest": {
+    "transform": {},
+    "testEnvironment": "node"
+  },
+  "dependencies": {
+    "@actual-app/api": "^25.3.1",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "jest": "^30.2.0",
+    "supertest": "^7.2.2"
+  }
+}

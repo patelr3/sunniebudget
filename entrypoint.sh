@@ -103,6 +103,35 @@ echo "[entrypoint] Starting Actual Budget..."
 node app.js &
 NODE_PID=$!
 
+# ── Step 6: Inject MCP service session token ───────────────────
+# Wait for the server to initialize its SQLite database, then insert
+# a service session token. AB's validateSession() is method-agnostic,
+# so this works even with ACTUAL_LOGIN_METHOD=openid.
+(
+  DB_PATH="/data/server-files/account.sqlite3"
+  TOKEN_FILE="/persistent/.service-token"
+  RETRIES=0
+  MAX_RETRIES=60
+  while [ $RETRIES -lt $MAX_RETRIES ]; do
+    if [ -f "$DB_PATH" ]; then
+      # Generate or reuse the service token
+      SERVICE_TOKEN=$(cat "$TOKEN_FILE" 2>/dev/null || cat /proc/sys/kernel/random/uuid)
+      echo "$SERVICE_TOKEN" > "$TOKEN_FILE"
+      # Check if sessions table exists and insert token
+      if sqlite3 "$DB_PATH" "SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'" 2>/dev/null | grep -q sessions; then
+        sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO sessions (token, expires_at, user_id, auth_method) VALUES ('$SERVICE_TOKEN', -1, 'service-mcp', 'service');" 2>/dev/null
+        echo "[entrypoint] Service session token injected for MCP access."
+        break
+      fi
+    fi
+    RETRIES=$((RETRIES + 1))
+    sleep 2
+  done
+  if [ $RETRIES -eq $MAX_RETRIES ]; then
+    echo "[entrypoint] WARNING: Could not inject service token after ${MAX_RETRIES} attempts." >&2
+  fi
+) &
+
 # Wait for node process; if it exits, do a final sync
 wait $NODE_PID
 EXIT_CODE=$?
