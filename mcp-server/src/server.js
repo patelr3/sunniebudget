@@ -106,7 +106,7 @@ export function createApp() {
           if (budgets.length === 0) {
             throw new Error("No budgets found");
           }
-          await api.downloadBudget(budgets[0].id);
+          await api.downloadBudget(budgets[0].groupId);
         }
         return await handler(api, name, args || {});
       });
@@ -184,7 +184,7 @@ export function createApp() {
           if (!NO_BUDGET_TOOLS.has(name)) {
             const budgets = await api.getBudgets();
             if (budgets.length === 0) throw new Error("No budgets found");
-            await api.downloadBudget(budgets[0].id);
+            await api.downloadBudget(budgets[0].groupId);
           }
           return await handler(api, name, args || {});
         });

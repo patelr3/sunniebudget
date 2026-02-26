@@ -7,11 +7,11 @@ export const budgetTools = [
   },
   {
     name: "load_budget",
-    description: "Load a specific budget by its sync ID for subsequent operations",
+    description: "Load a specific budget by its groupId (sync ID) for subsequent operations",
     inputSchema: {
       type: "object",
       properties: {
-        budgetId: { type: "string", description: "The sync ID of the budget to load" },
+        budgetId: { type: "string", description: "The groupId (sync ID) of the budget to load, from list_budgets" },
       },
       required: ["budgetId"],
     },

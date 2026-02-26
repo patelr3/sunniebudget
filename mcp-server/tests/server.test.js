@@ -71,7 +71,7 @@ beforeEach(() => {
     sessionToken: "service-token-123",
   });
   // Default: one budget available
-  mockApi.getBudgets.mockResolvedValue([{ id: "budget-1", name: "My Budget" }]);
+  mockApi.getBudgets.mockResolvedValue([{ id: "budget-1", groupId: "sync-1", name: "My Budget" }]);
   mockApi.downloadBudget.mockResolvedValue(undefined);
 });
 
@@ -141,7 +141,7 @@ describe("Authentication", () => {
   });
 
   it("accepts valid JWT", async () => {
-    mockApi.getBudgets.mockResolvedValue([{ id: "b1", name: "Budget" }]);
+    mockApi.getBudgets.mockResolvedValue([{ id: "b1", groupId: "gs1", name: "Budget" }]);
 
     const token = makeToken();
     const res = await request(app)
@@ -156,8 +156,8 @@ describe("Authentication", () => {
 describe("Tool: list_budgets", () => {
   it("returns budgets from the user's instance", async () => {
     const budgets = [
-      { id: "b1", name: "Personal" },
-      { id: "b2", name: "Business" },
+      { id: "b1", groupId: "gs1", name: "Personal" },
+      { id: "b2", groupId: "gs2", name: "Business" },
     ];
     mockApi.getBudgets.mockResolvedValue(budgets);
 
@@ -191,7 +191,7 @@ describe("Tool: get_accounts", () => {
     const result = JSON.parse(res.body.content[0].text);
     expect(result).toEqual(accounts);
     // Should auto-load first budget
-    expect(mockApi.downloadBudget).toHaveBeenCalledWith("budget-1");
+    expect(mockApi.downloadBudget).toHaveBeenCalledWith("sync-1");
   });
 });
 
@@ -467,7 +467,7 @@ describe("MCP JSON-RPC endpoint (/mcp)", () => {
   });
 
   it("handles tools/call with valid auth", async () => {
-    const budgets = [{ id: "b1", name: "Test Budget" }];
+    const budgets = [{ id: "b1", groupId: "gs1", name: "Test Budget" }];
     mockApi.getBudgets.mockResolvedValue(budgets);
 
     const res = await request(app)
