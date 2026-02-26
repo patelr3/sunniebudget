@@ -51,8 +51,10 @@ export async function withActualApi(userId, serverUrl, sessionToken, fn) {
     await api.init({
       dataDir,
       serverURL: serverUrl,
-      sessionToken,
     });
+
+    // Set the pre-existing session token (init only accepts password, not token)
+    await api.internal.send('subscribe-set-token', { token: sessionToken });
 
     return await fn(api);
   } finally {
