@@ -2,13 +2,14 @@
 export const transactionTools = [
   {
     name: "get_transactions",
-    description: "Query transactions with optional filters",
+    description: "Query transactions with optional filters. Returns most recent first, limited to 50 by default.",
     inputSchema: {
       type: "object",
       properties: {
         accountId: { type: "string", description: "Filter by account ID" },
         startDate: { type: "string", description: "Start date (YYYY-MM-DD)" },
         endDate: { type: "string", description: "End date (YYYY-MM-DD)" },
+        limit: { type: "number", description: "Max transactions to return (default 50, max 200)" },
       },
     },
   },
@@ -86,11 +87,15 @@ export const transactionTools = [
 export async function handleTransactionTool(api, name, args) {
   switch (name) {
     case "get_transactions": {
-      return await api.getTransactions(
+      const limit = Math.min(Math.max(args.limit || 50, 1), 200);
+      const txns = await api.getTransactions(
         args.accountId,
         args.startDate,
         args.endDate,
       );
+      // Sort by date descending (most recent first), then apply limit
+      txns.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+      return txns.slice(0, limit);
     }
     case "create_transaction": {
       const txn = {
