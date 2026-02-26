@@ -18,7 +18,8 @@ sync_to_persistent() {
   if [ -d /persistent ]; then
     if [ "$RESTORE_OK" = true ]; then
       # Full restore succeeded — safe to mirror with --delete
-      rsync -rl --safe-links --delete /data/ /persistent/ 2>&1 | tail -3
+      # Exclude .service-token: it's written directly to /persistent by token injection
+      rsync -rl --safe-links --delete --exclude='.service-token' /data/ /persistent/ 2>&1 | tail -3
     else
       # Restore was partial or failed — only add/update, never delete
       echo "[entrypoint] Using additive sync (restore was incomplete)."
@@ -117,6 +118,8 @@ NODE_PID=$!
       # Generate or reuse the service token
       SERVICE_TOKEN=$(cat "$TOKEN_FILE" 2>/dev/null || cat /proc/sys/kernel/random/uuid)
       echo "$SERVICE_TOKEN" > "$TOKEN_FILE"
+      # Also write to /data/ so rsync --delete doesn't remove it from /persistent/
+      echo "$SERVICE_TOKEN" > /data/.service-token
       # Check if sessions table exists and insert token
       if sqlite3 "$DB_PATH" "SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'" 2>/dev/null | grep -q sessions; then
         sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO sessions (token, expires_at, user_id, auth_method) VALUES ('$SERVICE_TOKEN', -1, 'service-mcp', 'service');" 2>/dev/null
