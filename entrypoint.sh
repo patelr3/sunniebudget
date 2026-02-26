@@ -122,6 +122,8 @@ NODE_PID=$!
       echo "$SERVICE_TOKEN" > /data/.service-token
       # Check if sessions table exists and insert token
       if sqlite3 "$DB_PATH" "SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'" 2>/dev/null | grep -q sessions; then
+        # Create service user with ADMIN role so it can list all files
+        sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO users (id, user_name, display_name, role, enabled, owner) VALUES ('service-mcp', 'service-mcp', 'MCP Service', 'ADMIN', 1, 0);" 2>/dev/null
         sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO sessions (token, expires_at, user_id, auth_method) VALUES ('$SERVICE_TOKEN', -1, 'service-mcp', 'service');" 2>/dev/null
         echo "[entrypoint] Service session token injected for MCP access."
         break
