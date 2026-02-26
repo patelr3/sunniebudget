@@ -109,7 +109,7 @@ NODE_PID=$!
 # a service session token. AB's validateSession() is method-agnostic,
 # so this works even with ACTUAL_LOGIN_METHOD=openid.
 (
-  DB_PATH="/data/server-files/account.sqlite3"
+  DB_PATH="/data/server-files/account.sqlite"
   TOKEN_FILE="/persistent/.service-token"
   RETRIES=0
   MAX_RETRIES=60
