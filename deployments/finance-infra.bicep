@@ -8,13 +8,19 @@ param location string = 'westus2'
 @description('Docker image tag for finance-api')
 param financeApiTag string = 'latest'
 
-@secure()
-@description('Shared API key for auth-api ↔ finance-api communication')
-param financeApiKey string
-
 var tags = {
   project: 'finance'
   managedBy: 'bicep'
+}
+
+// AKV in patelr3-site-rg holds the finance-api-key secret
+var kvName = 'patelr3kvl3ytczhajsp7i'
+var kvSecretsUrl = 'https://${kvName}${environment().suffixes.keyvaultDns}/secrets'
+
+// ── Existing UAMI for AKV access (in patelr3-site-rg) ──────────
+resource kvReaderIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: 'patelr3-kv-reader'
+  scope: resourceGroup('patelr3-site-rg')
 }
 
 // ── Existing ACR (in patelr3-site-rg) ──────────────────────────
@@ -69,7 +75,10 @@ resource financeApi 'Microsoft.App/containerApps@2024-10-02-preview' = {
   location: location
   tags: tags
   identity: {
-    type: 'SystemAssigned'
+    type: 'SystemAssigned,UserAssigned'
+    userAssignedIdentities: {
+      '${kvReaderIdentity.id}': {}
+    }
   }
   properties: {
     managedEnvironmentId: cae.id
@@ -90,7 +99,7 @@ resource financeApi 'Microsoft.App/containerApps@2024-10-02-preview' = {
       ]
       secrets: [
         { name: 'acr-password', value: acr.listCredentials().passwords[0].value }
-        { name: 'finance-api-key', value: financeApiKey }
+        { name: 'finance-api-key', keyVaultUrl: '${kvSecretsUrl}/finance-api-key', identity: kvReaderIdentity.id }
       ]
     }
     template: {

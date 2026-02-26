@@ -121,8 +121,7 @@ jobs:
             --resource-group ${{ env.FINANCE_RG }} \
             --template-file deployments/finance-infra.bicep \
             --parameters \
-              financeApiTag="${{ env.IMAGE_TAG }}" \
-              financeApiKey="${{ secrets.FINANCE_API_KEY }}"
+              financeApiTag="${{ env.IMAGE_TAG }}"
 
       - name: Grant finance-api permissions
         run: |
