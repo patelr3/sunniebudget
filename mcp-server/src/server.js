@@ -1,6 +1,5 @@
 // ActualBudget MCP Server — HTTP streamable transport for Azure AI Foundry
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import express from "express";
 import config from "./config.js";
 import { validateAuth, AuthError } from "./auth.js";
@@ -57,16 +56,6 @@ export function createMcpServer() {
     name: "actualbudget-mcp",
     version: "1.0.0",
   });
-
-  // Register tool list
-  server.tool(
-    ALL_TOOLS.map(t => t.name),
-    async ({ params, _meta }) => {
-      // This handler is called for each tool; we'll dispatch via the Express wrapper
-      return { content: [{ type: "text", text: "Tool registered" }] };
-    },
-  );
-
   return server;
 }
 
@@ -131,25 +120,101 @@ export function createApp() {
     }
   });
 
-  // MCP protocol endpoint (streamable HTTP for Azure AI Foundry)
+  // MCP Streamable HTTP endpoint (JSON-RPC 2.0 for Azure AI Foundry Agent Service)
   app.post("/mcp", express.json(), async (req, res) => {
-    try {
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined, // stateless
+    const { method, id, params } = req.body;
+
+    if (method === "initialize") {
+      return res.json({
+        jsonrpc: "2.0",
+        id,
+        result: {
+          protocolVersion: "2024-11-05",
+          capabilities: { tools: { listChanged: false } },
+          serverInfo: { name: "actualbudget-mcp", version: "1.0.0" },
+        },
       });
-      const server = createMcpServer();
+    }
 
-      // Override tool handler to use our custom dispatch
-      const originalToolHandler = server._registeredTools;
+    if (method === "notifications/initialized") {
+      return res.status(204).end();
+    }
 
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err) {
-      console.error("[mcp] Protocol error:", err.message);
-      if (!res.headersSent) {
-        res.status(500).json({ error: "MCP protocol error" });
+    if (method === "tools/list") {
+      return res.json({
+        jsonrpc: "2.0",
+        id,
+        result: { tools: ALL_TOOLS },
+      });
+    }
+
+    if (method === "tools/call") {
+      const { name, arguments: args } = params;
+
+      // Validate auth from headers (Foundry forwards tool_resources headers)
+      let user;
+      try {
+        user = validateAuth(req.headers);
+      } catch (err) {
+        return res.json({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            content: [{ type: "text", text: `Authentication required: ${err.message}` }],
+            isError: true,
+          },
+        });
+      }
+
+      const handler = TOOL_HANDLERS[name];
+      if (!handler) {
+        return res.json({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            content: [{ type: "text", text: `Unknown tool: ${name}` }],
+            isError: true,
+          },
+        });
+      }
+
+      try {
+        const { serverUrl, sessionToken } = await getUserInstance(user.userId);
+        const result = await withActualApi(user.userId, serverUrl, sessionToken, async (api) => {
+          if (!NO_BUDGET_TOOLS.has(name)) {
+            const budgets = await api.getBudgets();
+            if (budgets.length === 0) throw new Error("No budgets found");
+            await api.downloadBudget(budgets[0].id);
+          }
+          return await handler(api, name, args || {});
+        });
+
+        return res.json({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          },
+        });
+      } catch (err) {
+        console.error(`[mcp] Tool ${name} error for user ${user.userId}:`, err.message);
+        return res.json({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            content: [{ type: "text", text: `Error: ${err.message}` }],
+            isError: true,
+          },
+        });
       }
     }
+
+    // Unknown method
+    return res.json({
+      jsonrpc: "2.0",
+      id,
+      error: { code: -32601, message: `Method not found: ${method}` },
+    });
   });
 
   return app;

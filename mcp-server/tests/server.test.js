@@ -433,3 +433,78 @@ describe("Error handling", () => {
     expect(res.body.error).toContain("No budgets");
   });
 });
+
+describe("MCP JSON-RPC endpoint (/mcp)", () => {
+  it("handles initialize", async () => {
+    const res = await request(app)
+      .post("/mcp")
+      .send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+      .expect(200);
+    expect(res.body.jsonrpc).toBe("2.0");
+    expect(res.body.id).toBe(1);
+    expect(res.body.result.protocolVersion).toBe("2024-11-05");
+    expect(res.body.result.capabilities.tools).toBeDefined();
+    expect(res.body.result.serverInfo.name).toBe("actualbudget-mcp");
+  });
+
+  it("handles notifications/initialized with 204", async () => {
+    await request(app)
+      .post("/mcp")
+      .send({ jsonrpc: "2.0", method: "notifications/initialized" })
+      .expect(204);
+  });
+
+  it("handles tools/list", async () => {
+    const res = await request(app)
+      .post("/mcp")
+      .send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })
+      .expect(200);
+    expect(res.body.result.tools).toBeInstanceOf(Array);
+    expect(res.body.result.tools.length).toBeGreaterThan(15);
+    const names = res.body.result.tools.map(t => t.name);
+    expect(names).toContain("list_budgets");
+    expect(names).toContain("get_accounts");
+  });
+
+  it("handles tools/call with valid auth", async () => {
+    const budgets = [{ id: "b1", name: "Test Budget" }];
+    mockApi.getBudgets.mockResolvedValue(budgets);
+
+    const res = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${makeToken()}`)
+      .send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "list_budgets", arguments: {} } })
+      .expect(200);
+    expect(res.body.result.content[0].type).toBe("text");
+    const result = JSON.parse(res.body.result.content[0].text);
+    expect(result).toEqual(budgets);
+  });
+
+  it("returns isError for tools/call without auth", async () => {
+    const res = await request(app)
+      .post("/mcp")
+      .send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "list_budgets", arguments: {} } })
+      .expect(200);
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toContain("Authentication required");
+  });
+
+  it("returns isError for unknown tool", async () => {
+    const res = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${makeToken()}`)
+      .send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "fake_tool", arguments: {} } })
+      .expect(200);
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toContain("Unknown tool");
+  });
+
+  it("returns error for unknown method", async () => {
+    const res = await request(app)
+      .post("/mcp")
+      .send({ jsonrpc: "2.0", id: 6, method: "unknown/method", params: {} })
+      .expect(200);
+    expect(res.body.error.code).toBe(-32601);
+    expect(res.body.error.message).toContain("Method not found");
+  });
+});
