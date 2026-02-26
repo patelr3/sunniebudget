@@ -3,7 +3,12 @@ export const budgetTools = [
   {
     name: "list_budgets",
     description: "List all budgets in the user's ActualBudget instance",
-    inputSchema: { type: "object", properties: {}, required: [] },
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Max budgets to return (default 50, max 100)" },
+      },
+    },
   },
   {
     name: "load_budget",
@@ -31,8 +36,9 @@ export const budgetTools = [
 export async function handleBudgetTool(api, name, args) {
   switch (name) {
     case "list_budgets": {
+      const limit = Math.min(Math.max(args.limit || 50, 1), 100);
       const budgets = await api.getBudgets();
-      return budgets;
+      return budgets.slice(0, limit);
     }
     case "load_budget": {
       await api.downloadBudget(args.budgetId);

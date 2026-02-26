@@ -3,7 +3,12 @@ export const categoryTools = [
   {
     name: "get_categories",
     description: "List all categories and category groups",
-    inputSchema: { type: "object", properties: {}, required: [] },
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Max categories to return (default 100, max 200)" },
+      },
+    },
   },
   {
     name: "create_category",
@@ -46,8 +51,11 @@ export const categoryTools = [
 
 export async function handleCategoryTool(api, name, args) {
   switch (name) {
-    case "get_categories":
-      return await api.getCategories();
+    case "get_categories": {
+      const limit = Math.min(Math.max(args.limit || 100, 1), 200);
+      const categories = await api.getCategories();
+      return categories.slice(0, limit);
+    }
     case "create_category": {
       const id = await api.createCategory({ name: args.name, group_id: args.groupId });
       return { id, name: args.name };

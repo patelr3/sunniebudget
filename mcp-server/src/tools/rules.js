@@ -3,7 +3,12 @@ export const ruleTools = [
   {
     name: "get_rules",
     description: "List all transaction rules",
-    inputSchema: { type: "object", properties: {}, required: [] },
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Max rules to return (default 50, max 200)" },
+      },
+    },
   },
   {
     name: "create_rule",
@@ -45,8 +50,11 @@ export const ruleTools = [
 
 export async function handleRuleTool(api, name, args) {
   switch (name) {
-    case "get_rules":
-      return await api.getRules();
+    case "get_rules": {
+      const limit = Math.min(Math.max(args.limit || 50, 1), 200);
+      const rules = await api.getRules();
+      return rules.slice(0, limit);
+    }
     case "create_rule": {
       const id = await api.createRule({
         conditions: args.conditions,

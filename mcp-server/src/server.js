@@ -112,7 +112,7 @@ export function createApp() {
       });
 
       res.json({
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(result) }],
       });
     } catch (err) {
       console.error(`[mcp] Tool ${name} error for user ${user.userId}:`, err.message);
@@ -193,7 +193,7 @@ export function createApp() {
           jsonrpc: "2.0",
           id,
           result: {
-            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+            content: [{ type: "text", text: JSON.stringify(result) }],
           },
         });
       } catch (err) {

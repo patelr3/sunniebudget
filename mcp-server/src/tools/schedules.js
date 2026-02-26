@@ -3,7 +3,12 @@ export const scheduleTools = [
   {
     name: "get_schedules",
     description: "List all scheduled/recurring transactions",
-    inputSchema: { type: "object", properties: {}, required: [] },
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Max schedules to return (default 50, max 200)" },
+      },
+    },
   },
   {
     name: "create_schedule",
@@ -26,8 +31,11 @@ export const scheduleTools = [
 
 export async function handleScheduleTool(api, name, args) {
   switch (name) {
-    case "get_schedules":
-      return await api.getSchedules();
+    case "get_schedules": {
+      const limit = Math.min(Math.max(args.limit || 50, 1), 200);
+      const schedules = await api.getSchedules();
+      return schedules.slice(0, limit);
+    }
     case "create_schedule": {
       const id = await api.createSchedule({
         account: args.accountId,
