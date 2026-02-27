@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "NODE_OPTIONS='--experimental-vm-modules' npx jest --forceExit"
+    "test": "LOG_LEVEL=silent NODE_OPTIONS='--experimental-vm-modules' npx jest --forceExit"
   },
   "jest": {
     "transform": {},
@@ -15,6 +15,7 @@
   "dependencies": {
     "@actual-app/api": "^25.3.1",
     "@modelcontextprotocol/sdk": "^1.12.1",
+    "@patelr3/tracing": "file:../../packages/tracing",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.2"
   },

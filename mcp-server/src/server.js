@@ -1,4 +1,11 @@
 // ActualBudget MCP Server — HTTP streamable transport for Azure AI Foundry
+import { initTracing, createLogger, trace, context, SpanStatusCode } from "@patelr3/tracing";
+
+initTracing("mcp-server");
+
+const logger = createLogger("mcp-server");
+const tracer = trace.getTracer("mcp-server");
+
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import express from "express";
 import config from "./config.js";
@@ -97,25 +104,39 @@ export function createApp() {
       // Get user's AB instance
       const { serverUrl, sessionToken } = await getUserInstance(user.userId);
 
-      // Execute tool with @actual-app/api connection
-      const result = await withActualApi(user.userId, serverUrl, sessionToken, async (api) => {
-        // Load budget if needed (for tools that require a loaded budget)
-        if (!NO_BUDGET_TOOLS.has(name)) {
-          // Get the first budget if none specified
-          const budgets = await api.getBudgets();
-          if (budgets.length === 0) {
-            throw new Error("No budgets found");
-          }
-          await api.downloadBudget(budgets[0].groupId);
+      // Execute tool with @actual-app/api connection, wrapped in a custom span
+      const result = await tracer.startActiveSpan(`mcp.tool.${name}`, async (span) => {
+        span.setAttribute("mcp.tool.name", name);
+        span.setAttribute("mcp.user.id", user.userId);
+        try {
+          const res = await withActualApi(user.userId, serverUrl, sessionToken, async (api) => {
+            // Load budget if needed (for tools that require a loaded budget)
+            if (!NO_BUDGET_TOOLS.has(name)) {
+              // Get the first budget if none specified
+              const budgets = await api.getBudgets();
+              if (budgets.length === 0) {
+                throw new Error("No budgets found");
+              }
+              await api.downloadBudget(budgets[0].groupId);
+            }
+            return await handler(api, name, args || {});
+          });
+          span.setStatus({ code: SpanStatusCode.OK });
+          return res;
+        } catch (err) {
+          span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+          span.recordException(err);
+          throw err;
+        } finally {
+          span.end();
         }
-        return await handler(api, name, args || {});
       });
 
       res.json({
         content: [{ type: "text", text: JSON.stringify(result) }],
       });
     } catch (err) {
-      console.error(`[mcp] Tool ${name} error for user ${user.userId}:`, err.message);
+      logger.error({ tool: name, userId: user.userId, err: err.message }, "MCP tool error");
       res.status(500).json({ error: err.message });
     }
   });
@@ -180,13 +201,28 @@ export function createApp() {
 
       try {
         const { serverUrl, sessionToken } = await getUserInstance(user.userId);
-        const result = await withActualApi(user.userId, serverUrl, sessionToken, async (api) => {
-          if (!NO_BUDGET_TOOLS.has(name)) {
-            const budgets = await api.getBudgets();
-            if (budgets.length === 0) throw new Error("No budgets found");
-            await api.downloadBudget(budgets[0].groupId);
+        const result = await tracer.startActiveSpan(`mcp.tool.${name}`, async (span) => {
+          span.setAttribute("mcp.tool.name", name);
+          span.setAttribute("mcp.user.id", user.userId);
+          span.setAttribute("mcp.transport", "jsonrpc");
+          try {
+            const res = await withActualApi(user.userId, serverUrl, sessionToken, async (api) => {
+              if (!NO_BUDGET_TOOLS.has(name)) {
+                const budgets = await api.getBudgets();
+                if (budgets.length === 0) throw new Error("No budgets found");
+                await api.downloadBudget(budgets[0].groupId);
+              }
+              return await handler(api, name, args || {});
+            });
+            span.setStatus({ code: SpanStatusCode.OK });
+            return res;
+          } catch (err) {
+            span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+            span.recordException(err);
+            throw err;
+          } finally {
+            span.end();
           }
-          return await handler(api, name, args || {});
         });
 
         return res.json({
@@ -197,7 +233,7 @@ export function createApp() {
           },
         });
       } catch (err) {
-        console.error(`[mcp] Tool ${name} error for user ${user.userId}:`, err.message);
+        logger.error({ tool: name, userId: user.userId, err: err.message }, "MCP tool error");
         return res.json({
           jsonrpc: "2.0",
           id,
@@ -224,7 +260,6 @@ export function createApp() {
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"))) {
   const app = createApp();
   app.listen(config.port, "0.0.0.0", () => {
-    console.log(`ActualBudget MCP Server listening on :${config.port}`);
-    console.log(`Tools available: ${ALL_TOOLS.length}`);
+    logger.info({ port: config.port, tools: ALL_TOOLS.length }, "ActualBudget MCP Server started");
   });
 }
