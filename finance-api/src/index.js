@@ -1,3 +1,7 @@
+import { initTracing, createLogger } from "./tracing.js";
+await initTracing();
+const logger = createLogger();
+
 import express from "express";
 import config from "./config.js";
 import { getStatus, create, update, remove, getServiceToken } from "./deploy.js";
@@ -26,7 +30,7 @@ app.get("/deployments/:userId", async (req, res) => {
     const result = await getStatus(req.params.userId);
     res.json(result);
   } catch (err) {
-    console.error("[finance-api] getStatus error:", err);
+    logger.error({ err, userId: req.params.userId }, "getStatus error");
     res.status(500).json({ error: "Failed to get status", message: err.message });
   }
 });
@@ -46,7 +50,7 @@ app.post("/deployments/:userId", async (req, res) => {
     const result = await create(req.params.userId, username);
     res.status(201).json(result);
   } catch (err) {
-    console.error("[finance-api] create error:", err);
+    logger.error({ err, userId: req.params.userId }, "create error");
     res.status(500).json({ error: "Failed to create deployment", message: err.message });
   }
 });
@@ -57,7 +61,7 @@ app.put("/deployments/:userId", async (req, res) => {
     const result = await update(req.params.userId);
     res.json(result);
   } catch (err) {
-    console.error("[finance-api] update error:", err);
+    logger.error({ err, userId: req.params.userId }, "update error");
     res.status(500).json({ error: "Failed to update deployment", message: err.message });
   }
 });
@@ -68,7 +72,7 @@ app.delete("/deployments/:userId", async (req, res) => {
     const result = await remove(req.params.userId);
     res.json(result);
   } catch (err) {
-    console.error("[finance-api] delete error:", err);
+    logger.error({ err, userId: req.params.userId }, "delete error");
     res.status(500).json({ error: "Failed to delete deployment", message: err.message });
   }
 });
@@ -82,13 +86,13 @@ app.get("/deployments/:userId/token", async (req, res) => {
     }
     res.json(result);
   } catch (err) {
-    console.error("[finance-api] getServiceToken error:", err);
+    logger.error({ err, userId: req.params.userId }, "getServiceToken error");
     res.status(500).json({ error: "Failed to get service token", message: err.message });
   }
 });
 
 app.listen(config.port, "0.0.0.0", () => {
-  console.log(`finance-api listening on :${config.port}`);
+  logger.info({ port: config.port }, "finance-api listening");
 });
 
 export default app;
