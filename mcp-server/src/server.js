@@ -120,6 +120,23 @@ export function createApp() {
     }
   });
 
+  // MCP Streamable HTTP endpoint — GET for SSE transport discovery
+  // Foundry sends GET first to establish SSE; server returns endpoint event
+  app.get("/mcp", (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    // Tell client to POST JSON-RPC messages to this same path
+    res.write("event: endpoint\ndata: /mcp\n\n");
+    res.flush?.();
+    // Keep connection open for server-initiated messages (heartbeat)
+    const heartbeat = setInterval(() => {
+      try { res.write(":heartbeat\n\n"); res.flush?.(); } catch { /* client gone */ }
+    }, 15_000);
+    req.on("close", () => clearInterval(heartbeat));
+  });
+
   // MCP Streamable HTTP endpoint (JSON-RPC 2.0 for Azure AI Foundry Agent Service)
   app.post("/mcp", express.json(), async (req, res) => {
     const { method, id, params } = req.body;
