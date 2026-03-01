@@ -20,10 +20,10 @@ function getJwksClient() {
 
 function extractClaims(payload) {
   return {
-    userId: payload.sub,
+    userId: String(payload.sub),
     email: payload.email || payload.preferred_username,
     name: payload.name,
-    role: payload.role,
+    role: payload.role || "user",
   };
 }
 
