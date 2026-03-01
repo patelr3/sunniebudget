@@ -68,66 +68,6 @@ export function createApp() {
     res.json({ status: "ok", service: "actualbudget-mcp-server", tools: ALL_TOOLS.length });
   });
 
-  // MCP tools/list endpoint (for direct HTTP access outside MCP protocol)
-  app.get("/tools", (_req, res) => {
-    res.json({ tools: ALL_TOOLS });
-  });
-
-  // MCP tool call endpoint (simplified HTTP API for tool execution)
-  app.post("/tools/call", express.json(), async (req, res) => {
-    const { name, arguments: args } = req.body;
-
-    // Validate user from Authorization header
-    let user;
-    try {
-      user = await validateAuth(req.headers);
-    } catch (err) {
-      if (err instanceof AuthError) {
-        return res.status(401).json({ error: err.message });
-      }
-      return res.status(500).json({ error: "Internal error" });
-    }
-
-    // Find the handler
-    const handler = TOOL_HANDLERS[name];
-    if (!handler) {
-      return res.status(400).json({ error: `Unknown tool: ${name}` });
-    }
-
-    try {
-      // Get user's AB instance
-      const { serverUrl, sessionToken } = await getUserInstance(user.userId);
-
-      // Execute tool with @actual-app/api connection
-      const result = await withActualApi(user.userId, serverUrl, sessionToken, async (api) => {
-        // Load budget if needed (for tools that require a loaded budget)
-        if (!NO_BUDGET_TOOLS.has(name)) {
-          // Get the first budget if none specified
-          const budgets = await api.getBudgets();
-          if (budgets.length === 0) {
-            throw new Error("No budgets found for user");
-          }
-          try {
-            await api.downloadBudget(budgets[0].groupId);
-          } catch (dlErr) {
-            logger.error("Auto-load budget failed", {
-              tool: name, budgetId: budgets[0].groupId, error: dlErr.message,
-            });
-            throw new Error(`Failed to load budget: ${dlErr.message}`);
-          }
-        }
-        return await handler(api, name, args || {});
-      });
-
-      res.json({
-        content: [{ type: "text", text: JSON.stringify(result) }],
-      });
-    } catch (err) {
-      logger.error("Tool call error", { tool: name, userId: user.userId, error: err.message });
-      res.status(500).json({ error: err.message });
-    }
-  });
-
   // MCP Streamable HTTP endpoint — GET for SSE transport discovery
   // Foundry sends GET first to establish SSE; server returns endpoint event
   app.get("/mcp", (req, res) => {

@@ -1,8 +1,6 @@
 const config = {
   port: Number(process.env.PORT) || 8090,
-  // Firebase project ID for token validation
-  firebaseProjectId: process.env.FIREBASE_PROJECT_ID || "",
-  // OIDC JWKS URL for RS256 token validation (fallback for auth-api OIDC tokens)
+  // OIDC JWKS URL for RS256 token validation (Foundry OAuth identity passthrough)
   oidcJwksUrl: process.env.OIDC_JWKS_URL || null,
   // finance-api URL + API key (for looking up user's AB instance + service token)
   financeApiUrl: process.env.FINANCE_API_URL || "",
