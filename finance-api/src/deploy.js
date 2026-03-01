@@ -4,9 +4,6 @@ import { ContainerAppsAPIClient } from "@azure/arm-appcontainers";
 import { StorageManagementClient } from "@azure/arm-storage";
 import crypto from "node:crypto";
 import config from "./config.js";
-import { createLogger } from "./tracing.js";
-
-const logger = createLogger();
 
 const {
   subscriptionId: SUB, financeRg: RG, financeCae: CAE,
@@ -94,7 +91,7 @@ export async function getStatus(userId) {
 
     return { status, fqdn: fqdn ? `https://${fqdn}` : "", provisioningState: prov, appName: app.name };
   } catch (err) {
-    logger.error({ err, userId }, "getStatus failed");
+    console.error(`[deploy] getStatus(${userId}):`, err.message);
     return { status: "error", message: err.message };
   }
 }
@@ -245,7 +242,7 @@ export async function getServiceToken(userId) {
     const fqdn = app.configuration?.ingress?.fqdn || "";
     return { token, fqdn: fqdn ? `https://${fqdn}` : "" };
   } catch (err) {
-    logger.error({ err, userId }, "getServiceToken failed");
+    console.error(`[deploy] getServiceToken(${userId}):`, err.message);
     throw err;
   }
 }
