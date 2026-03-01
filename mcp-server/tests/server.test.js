@@ -23,6 +23,7 @@ const mockApi = {
   getBudgets: jest.fn(),
   downloadBudget: jest.fn(),
   getBudgetMonth: jest.fn(),
+  getBudgetMonths: jest.fn(),
   getAccounts: jest.fn(),
   createAccount: jest.fn(),
   closeAccount: jest.fn(),
@@ -85,6 +86,7 @@ beforeEach(() => {
   // Default: one budget available
   mockApi.getBudgets.mockResolvedValue([{ id: "budget-1", groupId: "sync-1", name: "My Budget" }]);
   mockApi.downloadBudget.mockResolvedValue(undefined);
+  mockApi.getBudgetMonths.mockResolvedValue(["2026-01", "2026-02", "2026-03"]);
 });
 
 // Helper: make MCP JSON-RPC tool call

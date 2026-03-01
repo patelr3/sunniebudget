@@ -42,6 +42,8 @@ export async function handleBudgetTool(api, name, args) {
     }
     case "load_budget": {
       await api.downloadBudget(args.budgetId);
+      // Validate the budget actually loaded (downloadBudget can silently fail)
+      await api.getBudgetMonths();
       return { loaded: true, budgetId: args.budgetId };
     }
     case "get_budget_summary": {

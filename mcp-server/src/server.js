@@ -158,6 +158,9 @@ export function createApp() {
             if (budgets.length === 0) throw new Error("No budgets found for user");
             try {
               await api.downloadBudget(budgets[0].groupId);
+              // downloadBudget can silently fail (e.g., out-of-sync-migrations)
+              // without throwing — validate that a budget is actually open
+              await api.getBudgetMonths();
             } catch (dlErr) {
               logger.error("Auto-load budget failed", {
                 tool: name, budgetId: budgets[0].groupId, error: dlErr.message,
