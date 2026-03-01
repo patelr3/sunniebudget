@@ -1,8 +1,8 @@
 const config = {
   port: Number(process.env.PORT) || 8090,
-  // auth-api JWT secret (for validating user identity from Foundry headers)
-  jwtSecret: process.env.JWT_SECRET || "change-me",
-  // OIDC JWKS URL for RS256 token validation (e.g. https://www.arayosun.com/api/auth/oidc/jwks)
+  // Firebase project ID for token validation
+  firebaseProjectId: process.env.FIREBASE_PROJECT_ID || "",
+  // OIDC JWKS URL for RS256 token validation (fallback for auth-api OIDC tokens)
   oidcJwksUrl: process.env.OIDC_JWKS_URL || null,
   // finance-api URL + API key (for looking up user's AB instance + service token)
   financeApiUrl: process.env.FINANCE_API_URL || "",

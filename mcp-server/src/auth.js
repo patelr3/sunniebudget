@@ -1,22 +1,19 @@
-// Validates user identity from Authorization header (JWT issued by auth-api)
-import jwt from "jsonwebtoken";
-import jwksRsa from "jwks-rsa";
+// Validates user identity from Authorization header (Firebase ID token or OIDC token)
+import { createRemoteJWKSet, jwtVerify, decodeJwt } from "jose";
 import config from "./config.js";
 import logger from "./logger.js";
 
-// Lazily initialised JWKS client (only when OIDC_JWKS_URL is configured)
-let jwksClient = null;
+// Firebase token validation via Google's public keys
+const GOOGLE_CERTS_URL = "https://www.googleapis.com/oauth2/v3/certs";
+const FIREBASE_JWKS = createRemoteJWKSet(new URL(GOOGLE_CERTS_URL));
 
-function getJwksClient() {
-  if (!jwksClient && config.oidcJwksUrl) {
-    jwksClient = jwksRsa({
-      jwksUri: config.oidcJwksUrl,
-      cache: true,
-      cacheMaxEntries: 5,
-      jwksRequestsPerMinute: 5,
-    });
+// OIDC JWKS validation (for tokens from auth-api OIDC IdP)
+let oidcJwks = null;
+function getOidcJwks() {
+  if (!oidcJwks && config.oidcJwksUrl) {
+    oidcJwks = createRemoteJWKSet(new URL(config.oidcJwksUrl));
   }
-  return jwksClient;
+  return oidcJwks;
 }
 
 function extractClaims(payload) {
@@ -36,43 +33,34 @@ export async function validateAuth(headers) {
 
   const token = authHeader.slice(7);
 
-  // Fast path: try HS256 verification with shared secret
-  try {
-    const payload = jwt.verify(token, config.jwtSecret);
-    logger.info("Auth validated via HS256", { sub: payload.sub, email: payload.email });
-    return extractClaims(payload);
-  } catch (err) {
-    logger.info("HS256 validation failed, trying RS256", { error: err.message });
-  }
-
-  // Fallback: try RS256 verification via OIDC JWKS
-  if (config.oidcJwksUrl) {
+  // Try Firebase ID token validation first
+  if (config.firebaseProjectId) {
     try {
-      const decoded = jwt.decode(token, { complete: true });
-      logger.info("Attempting RS256 validation", {
-        alg: decoded?.header?.alg,
-        kid: decoded?.header?.kid,
-        iss: decoded?.payload?.iss,
-        sub: decoded?.payload?.sub,
-        jwksUrl: config.oidcJwksUrl,
+      const { payload } = await jwtVerify(token, FIREBASE_JWKS, {
+        issuer: `https://securetoken.google.com/${config.firebaseProjectId}`,
+        audience: config.firebaseProjectId,
       });
-      if (decoded?.header?.alg === "RS256" && decoded.header.kid) {
-        const client = getJwksClient();
-        const key = await client.getSigningKey(decoded.header.kid);
-        const publicKey = key.getPublicKey();
-        const payload = jwt.verify(token, publicKey, { algorithms: ["RS256"] });
-        logger.info("Auth validated via RS256 (OIDC)", { sub: payload.sub, email: payload.email });
-        return extractClaims(payload);
-      }
+      logger.info("Auth validated via Firebase", { sub: payload.sub, email: payload.email });
+      return extractClaims(payload);
     } catch (err) {
-      logger.warn("RS256 validation failed", { error: err.message });
+      logger.info("Firebase validation failed, trying OIDC", { error: err.message });
     }
-  } else {
-    logger.info("RS256 skipped (no OIDC_JWKS_URL configured)");
   }
 
-  logger.warn("Auth failed: no valid JWT", { hasOidcJwks: !!config.oidcJwksUrl });
-  throw new AuthError("Invalid or expired JWT");
+  // Fallback: try OIDC JWKS validation (for auth-api issued OIDC tokens)
+  const jwks = getOidcJwks();
+  if (jwks) {
+    try {
+      const { payload } = await jwtVerify(token, jwks);
+      logger.info("Auth validated via OIDC JWKS", { sub: payload.sub, email: payload.email });
+      return extractClaims(payload);
+    } catch (err) {
+      logger.warn("OIDC JWKS validation failed", { error: err.message });
+    }
+  }
+
+  logger.warn("Auth failed: no valid token", { hasFirebase: !!config.firebaseProjectId, hasOidcJwks: !!config.oidcJwksUrl });
+  throw new AuthError("Invalid or expired token");
 }
 
 export class AuthError extends Error {

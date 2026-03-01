@@ -1,39 +1,23 @@
 import { jest } from "@jest/globals";
-import jwt from "jsonwebtoken";
-import crypto from "crypto";
 
-const JWT_SECRET = "change-me";
+// Mock jose to control token validation without needing real JWKS endpoints
+const mockJwtVerify = jest.fn();
+
+jest.unstable_mockModule("jose", () => ({
+  createRemoteJWKSet: jest.fn(() => "mock-jwks"),
+  jwtVerify: mockJwtVerify,
+  decodeJwt: jest.fn(),
+}));
 
 function makeToken(payload = {}) {
-  return jwt.sign(
-    { sub: "1", email: "test@test.com", name: "Test", role: "user", ...payload },
-    JWT_SECRET,
-    { expiresIn: "1h" }
-  );
+  const claims = { sub: "1", email: "test@test.com", name: "Test", role: "user", ...payload };
+  return "fake-firebase-token-" + JSON.stringify(claims);
 }
 
-// Generate an RS256 key pair for OIDC tests
-const { publicKey: rsaPublicKey, privateKey: rsaPrivateKey } = crypto.generateKeyPairSync("rsa", {
-  modulusLength: 2048,
-  publicKeyEncoding: { type: "spki", format: "pem" },
-  privateKeyEncoding: { type: "pkcs8", format: "pem" },
-});
-
-function makeRS256Token(payload = {}) {
-  return jwt.sign(
-    { sub: "42", email: "oidc@test.com", name: "OIDC User", role: "user", ...payload },
-    rsaPrivateKey,
-    { algorithm: "RS256", expiresIn: "1h", keyid: "test-kid-1" }
-  );
+function makeOidcToken(payload = {}) {
+  const claims = { sub: "42", email: "oidc@test.com", name: "OIDC User", role: "user", ...payload };
+  return "fake-oidc-token-" + JSON.stringify(claims);
 }
-
-// Mock jwks-rsa — returns a client whose getSigningKey resolves to the test RSA public key
-const mockGetSigningKey = jest.fn();
-jest.unstable_mockModule("jwks-rsa", () => {
-  const factory = () => ({ getSigningKey: mockGetSigningKey });
-  factory.default = factory;
-  return { default: factory };
-});
 
 // Mock @actual-app/api
 const mockApi = {
@@ -87,6 +71,22 @@ beforeAll(() => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  config.firebaseProjectId = "test-project";
+  // Default: mock jose to validate tokens by extracting embedded claims
+  mockJwtVerify.mockImplementation(async (token, _jwks, options) => {
+    if (options?.issuer) {
+      // Firebase path (called with issuer/audience options)
+      if (token.startsWith("fake-firebase-token-")) {
+        return { payload: JSON.parse(token.slice("fake-firebase-token-".length)) };
+      }
+      throw new Error("Invalid Firebase token");
+    }
+    // OIDC path (no issuer option)
+    if (token.startsWith("fake-oidc-token-")) {
+      return { payload: JSON.parse(token.slice("fake-oidc-token-".length)) };
+    }
+    throw new Error("Invalid token");
+  });
   // Default: withActualApi executes the callback with mockApi
   mockActualClient.withActualApi.mockImplementation(async (_userId, _url, _token, fn) => {
     return await fn(mockApi);
@@ -156,10 +156,9 @@ describe("Authentication", () => {
   });
 
   it("rejects expired JWT", async () => {
-    const token = jwt.sign({ sub: "1" }, JWT_SECRET, { expiresIn: "-1h" });
     const res = await request(app)
       .post("/tools/call")
-      .set("Authorization", `Bearer ${token}`)
+      .set("Authorization", "Bearer expired-token")
       .send({ name: "list_budgets", arguments: {} })
       .expect(401);
     expect(res.body.error).toContain("Invalid");
@@ -178,20 +177,21 @@ describe("Authentication", () => {
   });
 });
 
-describe("RS256 OIDC Authentication", () => {
+describe("OIDC JWKS Authentication", () => {
   beforeEach(() => {
+    // Disable Firebase so OIDC fallback path is tested
+    config.firebaseProjectId = "";
     config.oidcJwksUrl = "https://example.com/.well-known/jwks.json";
-    mockGetSigningKey.mockResolvedValue({ getPublicKey: () => rsaPublicKey });
   });
 
   afterEach(() => {
     config.oidcJwksUrl = null;
   });
 
-  it("accepts a valid RS256 OIDC token", async () => {
+  it("accepts a valid OIDC token via fallback path", async () => {
     mockApi.getBudgets.mockResolvedValue([{ id: "b1", groupId: "gs1", name: "Budget" }]);
 
-    const token = makeRS256Token();
+    const token = makeOidcToken();
     const res = await request(app)
       .post("/tools/call")
       .set("Authorization", `Bearer ${token}`)
@@ -199,13 +199,12 @@ describe("RS256 OIDC Authentication", () => {
       .expect(200);
 
     expect(res.body.content).toBeDefined();
-    expect(mockGetSigningKey).toHaveBeenCalledWith("test-kid-1");
   });
 
   it("extracts preferred_username as email fallback", async () => {
     mockApi.getBudgets.mockResolvedValue([{ id: "b1", groupId: "gs1", name: "Budget" }]);
 
-    const token = makeRS256Token({ email: undefined, preferred_username: "oidcuser@example.com" });
+    const token = makeOidcToken({ email: undefined, preferred_username: "oidcuser@example.com" });
     const res = await request(app)
       .post("/tools/call")
       .set("Authorization", `Bearer ${token}`)
@@ -217,10 +216,23 @@ describe("RS256 OIDC Authentication", () => {
     expect(mockActualClient.getUserInstance).toHaveBeenCalledWith("42");
   });
 
-  it("rejects RS256 token when OIDC_JWKS_URL is not configured", async () => {
+  it("rejects token when neither Firebase nor OIDC is configured", async () => {
+    config.firebaseProjectId = "";
     config.oidcJwksUrl = null;
+    mockJwtVerify.mockRejectedValue(new Error("No valid key"));
 
-    const token = makeRS256Token();
+    const res = await request(app)
+      .post("/tools/call")
+      .set("Authorization", "Bearer some-token")
+      .send({ name: "list_budgets", arguments: {} })
+      .expect(401);
+    expect(res.body.error).toContain("Invalid");
+  });
+
+  it("rejects OIDC token when JWKS validation fails", async () => {
+    mockJwtVerify.mockRejectedValue(new Error("Key not found"));
+
+    const token = makeOidcToken();
     const res = await request(app)
       .post("/tools/call")
       .set("Authorization", `Bearer ${token}`)
@@ -229,22 +241,11 @@ describe("RS256 OIDC Authentication", () => {
     expect(res.body.error).toContain("Invalid");
   });
 
-  it("rejects RS256 token when JWKS key fetch fails", async () => {
-    mockGetSigningKey.mockRejectedValue(new Error("Key not found"));
-
-    const token = makeRS256Token();
-    const res = await request(app)
-      .post("/tools/call")
-      .set("Authorization", `Bearer ${token}`)
-      .send({ name: "list_budgets", arguments: {} })
-      .expect(401);
-    expect(res.body.error).toContain("Invalid");
-  });
-
-  it("prefers HS256 when token is valid for both", async () => {
+  it("prefers Firebase when both Firebase and OIDC are configured", async () => {
+    config.firebaseProjectId = "test-project";
+    config.oidcJwksUrl = "https://example.com/.well-known/jwks.json";
     mockApi.getBudgets.mockResolvedValue([{ id: "b1", groupId: "gs1", name: "Budget" }]);
 
-    // HS256 token should be validated without touching JWKS
     const token = makeToken();
     const res = await request(app)
       .post("/tools/call")
@@ -253,13 +254,14 @@ describe("RS256 OIDC Authentication", () => {
       .expect(200);
 
     expect(res.body.content).toBeDefined();
-    expect(mockGetSigningKey).not.toHaveBeenCalled();
+    // Firebase succeeded on first try, so jwtVerify called only once
+    expect(mockJwtVerify).toHaveBeenCalledTimes(1);
   });
 
-  it("works via MCP JSON-RPC endpoint with RS256", async () => {
+  it("works via MCP JSON-RPC endpoint with OIDC", async () => {
     mockApi.getBudgets.mockResolvedValue([{ id: "b1", groupId: "gs1", name: "Budget" }]);
 
-    const token = makeRS256Token();
+    const token = makeOidcToken();
     const res = await request(app)
       .post("/mcp")
       .set("Authorization", `Bearer ${token}`)
