@@ -2,6 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import express from "express";
 import config from "./config.js";
+import logger from "./logger.js";
 import { validateAuth, AuthError } from "./auth.js";
 import { getUserInstance, withActualApi } from "./actual-client.js";
 import { budgetTools, handleBudgetTool } from "./tools/budgets.js";
@@ -123,6 +124,7 @@ export function createApp() {
   // MCP Streamable HTTP endpoint — GET for SSE transport discovery
   // Foundry sends GET first to establish SSE; server returns endpoint event
   app.get("/mcp", (req, res) => {
+    logger.info("SSE transport connection opened");
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
@@ -140,6 +142,7 @@ export function createApp() {
   // MCP Streamable HTTP endpoint (JSON-RPC 2.0 for Azure AI Foundry Agent Service)
   app.post("/mcp", express.json(), async (req, res) => {
     const { method, id, params } = req.body;
+    logger.info("MCP JSON-RPC request", { method, id });
 
     if (method === "initialize") {
       return res.json({
@@ -167,12 +170,15 @@ export function createApp() {
 
     if (method === "tools/call") {
       const { name, arguments: args } = params;
+      logger.info("MCP tools/call", { tool: name, hasAuth: !!req.headers.authorization });
 
       // Validate auth from headers (Foundry forwards tool_resources headers)
       let user;
       try {
         user = await validateAuth(req.headers);
+        logger.info("MCP auth success", { tool: name, userId: user.userId, email: user.email });
       } catch (err) {
+        logger.warn("MCP auth failed", { tool: name, error: err.message });
         return res.json({
           jsonrpc: "2.0",
           id,
@@ -197,6 +203,7 @@ export function createApp() {
 
       try {
         const { serverUrl, sessionToken } = await getUserInstance(user.userId);
+        logger.info("MCP tool executing", { tool: name, userId: user.userId, serverUrl });
         const result = await withActualApi(user.userId, serverUrl, sessionToken, async (api) => {
           if (!NO_BUDGET_TOOLS.has(name)) {
             const budgets = await api.getBudgets();
@@ -214,7 +221,7 @@ export function createApp() {
           },
         });
       } catch (err) {
-        console.error(`[mcp] Tool ${name} error for user ${user.userId}:`, err.message);
+        logger.error("MCP tool error", { tool: name, userId: user.userId, error: err.message });
         return res.json({
           jsonrpc: "2.0",
           id,
@@ -235,13 +242,4 @@ export function createApp() {
   });
 
   return app;
-}
-
-// Start server if run directly
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"))) {
-  const app = createApp();
-  app.listen(config.port, "0.0.0.0", () => {
-    console.log(`ActualBudget MCP Server listening on :${config.port}`);
-    console.log(`Tools available: ${ALL_TOOLS.length}`);
-  });
 }

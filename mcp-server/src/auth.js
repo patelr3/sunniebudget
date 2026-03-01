@@ -2,6 +2,7 @@
 import jwt from "jsonwebtoken";
 import jwksRsa from "jwks-rsa";
 import config from "./config.js";
+import logger from "./logger.js";
 
 // Lazily initialised JWKS client (only when OIDC_JWKS_URL is configured)
 let jwksClient = null;
@@ -38,29 +39,39 @@ export async function validateAuth(headers) {
   // Fast path: try HS256 verification with shared secret
   try {
     const payload = jwt.verify(token, config.jwtSecret);
-    console.log("[auth] Validated token via HS256");
+    logger.info("Auth validated via HS256", { sub: payload.sub, email: payload.email });
     return extractClaims(payload);
-  } catch {
-    // HS256 failed — fall through to RS256 if configured
+  } catch (err) {
+    logger.info("HS256 validation failed, trying RS256", { error: err.message });
   }
 
   // Fallback: try RS256 verification via OIDC JWKS
   if (config.oidcJwksUrl) {
     try {
       const decoded = jwt.decode(token, { complete: true });
+      logger.info("Attempting RS256 validation", {
+        alg: decoded?.header?.alg,
+        kid: decoded?.header?.kid,
+        iss: decoded?.payload?.iss,
+        sub: decoded?.payload?.sub,
+        jwksUrl: config.oidcJwksUrl,
+      });
       if (decoded?.header?.alg === "RS256" && decoded.header.kid) {
         const client = getJwksClient();
         const key = await client.getSigningKey(decoded.header.kid);
         const publicKey = key.getPublicKey();
         const payload = jwt.verify(token, publicKey, { algorithms: ["RS256"] });
-        console.log("[auth] Validated token via RS256 (OIDC)");
+        logger.info("Auth validated via RS256 (OIDC)", { sub: payload.sub, email: payload.email });
         return extractClaims(payload);
       }
-    } catch {
-      // RS256 also failed
+    } catch (err) {
+      logger.warn("RS256 validation failed", { error: err.message });
     }
+  } else {
+    logger.info("RS256 skipped (no OIDC_JWKS_URL configured)");
   }
 
+  logger.warn("Auth failed: no valid JWT", { hasOidcJwks: !!config.oidcJwksUrl });
   throw new AuthError("Invalid or expired JWT");
 }
 

@@ -7,4 +7,4 @@ RUN npm ci --production
 COPY src/ src/
 
 EXPOSE 8090
-CMD ["node", "src/server.js"]
+CMD ["node", "src/index.js"]
