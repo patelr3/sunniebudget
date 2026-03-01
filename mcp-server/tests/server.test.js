@@ -550,6 +550,38 @@ describe("Error handling", () => {
 
     expect(res.body.error).toContain("No budgets");
   });
+
+  it("returns 500 with descriptive error when downloadBudget fails", async () => {
+    mockApi.downloadBudget.mockRejectedValue(new Error("No budget file is open"));
+    mockActualClient.withActualApi.mockImplementation(async (_userId, _url, _token, fn) => {
+      return await fn(mockApi);
+    });
+
+    const res = await request(app)
+      .post("/tools/call")
+      .set("Authorization", `Bearer ${makeToken()}`)
+      .send({ name: "get_accounts", arguments: {} })
+      .expect(500);
+
+    expect(res.body.error).toContain("Failed to load budget");
+    expect(res.body.error).toContain("No budget file is open");
+  });
+
+  it("returns isError via MCP when downloadBudget fails", async () => {
+    mockApi.downloadBudget.mockRejectedValue(new Error("No budget file is open"));
+    mockActualClient.withActualApi.mockImplementation(async (_userId, _url, _token, fn) => {
+      return await fn(mockApi);
+    });
+
+    const res = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${makeToken()}`)
+      .send({ jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "get_accounts", arguments: {} } })
+      .expect(200);
+
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toContain("Failed to load budget");
+  });
 });
 
 describe("MCP JSON-RPC endpoint (/mcp)", () => {

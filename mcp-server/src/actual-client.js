@@ -1,7 +1,8 @@
 // Manages @actual-app/api connections to per-user ActualBudget instances.
 // Each connection is short-lived (per tool call) to keep the MCP server stateless.
 import * as api from "@actual-app/api";
-import fs from "fs/promises";
+import { rm, mkdir } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "path";
 import config from "./config.js";
 
@@ -43,9 +44,9 @@ export async function getUserInstance(userId) {
 
 // Execute a function with an initialized @actual-app/api connection
 export async function withActualApi(userId, serverUrl, sessionToken, fn) {
-  // Create isolated data directory per user
-  const dataDir = path.join(config.actualDataDir, `user-${userId}`);
-  await fs.mkdir(dataDir, { recursive: true });
+  // Use per-request unique directory to prevent concurrent request races
+  const dataDir = path.join(config.actualDataDir, `user-${userId}-${randomUUID()}`);
+  await mkdir(dataDir, { recursive: true });
 
   try {
     await api.init({
@@ -63,5 +64,7 @@ export async function withActualApi(userId, serverUrl, sessionToken, fn) {
     } catch {
       // Ignore shutdown errors
     }
+    // Clean up per-request data directory
+    rm(dataDir, { recursive: true, force: true }).catch(() => {});
   }
 }

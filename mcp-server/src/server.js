@@ -105,9 +105,16 @@ export function createApp() {
           // Get the first budget if none specified
           const budgets = await api.getBudgets();
           if (budgets.length === 0) {
-            throw new Error("No budgets found");
+            throw new Error("No budgets found for user");
           }
-          await api.downloadBudget(budgets[0].groupId);
+          try {
+            await api.downloadBudget(budgets[0].groupId);
+          } catch (dlErr) {
+            logger.error("Auto-load budget failed", {
+              tool: name, budgetId: budgets[0].groupId, error: dlErr.message,
+            });
+            throw new Error(`Failed to load budget: ${dlErr.message}`);
+          }
         }
         return await handler(api, name, args || {});
       });
@@ -116,7 +123,7 @@ export function createApp() {
         content: [{ type: "text", text: JSON.stringify(result) }],
       });
     } catch (err) {
-      console.error(`[mcp] Tool ${name} error for user ${user.userId}:`, err.message);
+      logger.error("Tool call error", { tool: name, userId: user.userId, error: err.message });
       res.status(500).json({ error: err.message });
     }
   });
@@ -191,6 +198,7 @@ export function createApp() {
 
       const handler = TOOL_HANDLERS[name];
       if (!handler) {
+        logger.error("MCP tool error", { tool: name, output: `Unknown tool: ${name}` });
         return res.json({
           jsonrpc: "2.0",
           id,
@@ -207,8 +215,15 @@ export function createApp() {
         const result = await withActualApi(user.userId, serverUrl, sessionToken, async (api) => {
           if (!NO_BUDGET_TOOLS.has(name)) {
             const budgets = await api.getBudgets();
-            if (budgets.length === 0) throw new Error("No budgets found");
-            await api.downloadBudget(budgets[0].groupId);
+            if (budgets.length === 0) throw new Error("No budgets found for user");
+            try {
+              await api.downloadBudget(budgets[0].groupId);
+            } catch (dlErr) {
+              logger.error("Auto-load budget failed", {
+                tool: name, budgetId: budgets[0].groupId, error: dlErr.message,
+              });
+              throw new Error(`Failed to load budget: ${dlErr.message}`);
+            }
           }
           return await handler(api, name, args || {});
         });
