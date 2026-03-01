@@ -1,5 +1,6 @@
 import { jest } from "@jest/globals";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 
 const JWT_SECRET = "change-me";
 
@@ -10,6 +11,29 @@ function makeToken(payload = {}) {
     { expiresIn: "1h" }
   );
 }
+
+// Generate an RS256 key pair for OIDC tests
+const { publicKey: rsaPublicKey, privateKey: rsaPrivateKey } = crypto.generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  publicKeyEncoding: { type: "spki", format: "pem" },
+  privateKeyEncoding: { type: "pkcs8", format: "pem" },
+});
+
+function makeRS256Token(payload = {}) {
+  return jwt.sign(
+    { sub: "42", email: "oidc@test.com", name: "OIDC User", role: "user", ...payload },
+    rsaPrivateKey,
+    { algorithm: "RS256", expiresIn: "1h", keyid: "test-kid-1" }
+  );
+}
+
+// Mock jwks-rsa — returns a client whose getSigningKey resolves to the test RSA public key
+const mockGetSigningKey = jest.fn();
+jest.unstable_mockModule("jwks-rsa", () => {
+  const factory = () => ({ getSigningKey: mockGetSigningKey });
+  factory.default = factory;
+  return { default: factory };
+});
 
 // Mock @actual-app/api
 const mockApi = {
@@ -52,6 +76,7 @@ const mockActualClient = {
 jest.unstable_mockModule("../src/actual-client.js", () => mockActualClient);
 
 const { createApp } = await import("../src/server.js");
+const config = (await import("../src/config.js")).default;
 const request = (await import("supertest")).default;
 
 let app;
@@ -150,6 +175,99 @@ describe("Authentication", () => {
       .send({ name: "list_budgets", arguments: {} })
       .expect(200);
     expect(res.body.content).toBeDefined();
+  });
+});
+
+describe("RS256 OIDC Authentication", () => {
+  beforeEach(() => {
+    config.oidcJwksUrl = "https://example.com/.well-known/jwks.json";
+    mockGetSigningKey.mockResolvedValue({ getPublicKey: () => rsaPublicKey });
+  });
+
+  afterEach(() => {
+    config.oidcJwksUrl = null;
+  });
+
+  it("accepts a valid RS256 OIDC token", async () => {
+    mockApi.getBudgets.mockResolvedValue([{ id: "b1", groupId: "gs1", name: "Budget" }]);
+
+    const token = makeRS256Token();
+    const res = await request(app)
+      .post("/tools/call")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ name: "list_budgets", arguments: {} })
+      .expect(200);
+
+    expect(res.body.content).toBeDefined();
+    expect(mockGetSigningKey).toHaveBeenCalledWith("test-kid-1");
+  });
+
+  it("extracts preferred_username as email fallback", async () => {
+    mockApi.getBudgets.mockResolvedValue([{ id: "b1", groupId: "gs1", name: "Budget" }]);
+
+    const token = makeRS256Token({ email: undefined, preferred_username: "oidcuser@example.com" });
+    const res = await request(app)
+      .post("/tools/call")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ name: "list_budgets", arguments: {} })
+      .expect(200);
+
+    expect(res.body.content).toBeDefined();
+    // Verify the user extracted from the token was used (userId=42)
+    expect(mockActualClient.getUserInstance).toHaveBeenCalledWith("42");
+  });
+
+  it("rejects RS256 token when OIDC_JWKS_URL is not configured", async () => {
+    config.oidcJwksUrl = null;
+
+    const token = makeRS256Token();
+    const res = await request(app)
+      .post("/tools/call")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ name: "list_budgets", arguments: {} })
+      .expect(401);
+    expect(res.body.error).toContain("Invalid");
+  });
+
+  it("rejects RS256 token when JWKS key fetch fails", async () => {
+    mockGetSigningKey.mockRejectedValue(new Error("Key not found"));
+
+    const token = makeRS256Token();
+    const res = await request(app)
+      .post("/tools/call")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ name: "list_budgets", arguments: {} })
+      .expect(401);
+    expect(res.body.error).toContain("Invalid");
+  });
+
+  it("prefers HS256 when token is valid for both", async () => {
+    mockApi.getBudgets.mockResolvedValue([{ id: "b1", groupId: "gs1", name: "Budget" }]);
+
+    // HS256 token should be validated without touching JWKS
+    const token = makeToken();
+    const res = await request(app)
+      .post("/tools/call")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ name: "list_budgets", arguments: {} })
+      .expect(200);
+
+    expect(res.body.content).toBeDefined();
+    expect(mockGetSigningKey).not.toHaveBeenCalled();
+  });
+
+  it("works via MCP JSON-RPC endpoint with RS256", async () => {
+    mockApi.getBudgets.mockResolvedValue([{ id: "b1", groupId: "gs1", name: "Budget" }]);
+
+    const token = makeRS256Token();
+    const res = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ jsonrpc: "2.0", id: 10, method: "tools/call", params: { name: "list_budgets", arguments: {} } })
+      .expect(200);
+
+    expect(res.body.result.content[0].type).toBe("text");
+    expect(res.body.result.isError).toBeUndefined();
   });
 });
 

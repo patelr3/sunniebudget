@@ -79,7 +79,7 @@ export function createApp() {
     // Validate user from Authorization header
     let user;
     try {
-      user = validateAuth(req.headers);
+      user = await validateAuth(req.headers);
     } catch (err) {
       if (err instanceof AuthError) {
         return res.status(401).json({ error: err.message });
@@ -154,7 +154,7 @@ export function createApp() {
       // Validate auth from headers (Foundry forwards tool_resources headers)
       let user;
       try {
-        user = validateAuth(req.headers);
+        user = await validateAuth(req.headers);
       } catch (err) {
         return res.json({
           jsonrpc: "2.0",
