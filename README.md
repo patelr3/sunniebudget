@@ -1,4 +1,4 @@
-# actual-server-setup
+# sunniebudget
 
 Multi-tenant Actual Budget infrastructure for [patelr3-site](https://github.com/patelr3/patelr3-site). Manages per-user [Actual Budget](https://actualbudget.org/) instances deployed as Azure Container Apps.
 
@@ -55,7 +55,7 @@ bash tests/docker-build.test.sh
 ## Project Structure
 
 ```
-actual-server-setup/
+sunniebudget/
 ├── .github/
 │   ├── workflows/          ← Deploy, Backup, CI, Dependabot auto-merge
 │   ├── dependabot.yml

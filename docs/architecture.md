@@ -1,4 +1,4 @@
-# actual-server-setup — Architecture
+# sunniebudget — Architecture
 
 ## Overview
 
